@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node:*)",
+      "Bash(npx next:*)",
+      "Bash(find C:UsersalanpDocumentsprojectscosplayxclusive -type f \\\\\\(-name *.sql -o -name schema* -o -name migration* \\\\\\))"
+    ]
+  }
+}

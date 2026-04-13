@@ -1,0 +1,114 @@
+import { notFound } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
+import { hasPostAccess, isActiveSubscriber } from '@/lib/access'
+import { CreatorProfileClient } from './profile-client'
+import type { Post, Subscription, PostPurchase, Profile } from '@/lib/types'
+
+export default async function CreatorProfilePage(props: PageProps<'/[username]'>) {
+  const { username } = await props.params
+  const supabase = await createClient()
+
+  // Get viewer session + profile
+  const { data: { user } } = await supabase.auth.getUser()
+
+  let viewerProfile: Profile | null = null
+  if (user) {
+    const { data } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single()
+    viewerProfile = data
+  }
+
+  const isAdmin = viewerProfile?.role === 'admin'
+
+  // Get creator profile
+  const { data: creator } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('username', username.toLowerCase())
+    .eq('role', 'creator')
+    .single()
+
+  // Admins can view any creator profile (including suspended); others see 404 for non-approved
+  if (!creator || (!isAdmin && creator.creator_status !== 'approved')) {
+    notFound()
+  }
+
+  // Get posts
+  const { data: posts } = await supabase
+    .from('posts')
+    .select('*')
+    .eq('creator_id', creator.id)
+    .order('published_at', { ascending: false })
+
+  // If viewer is logged in, get their subscriptions and purchases
+  let subscriptions: Subscription[] = []
+  let purchases: PostPurchase[] = []
+
+  if (user) {
+    const [{ data: subs }, { data: purcs }] = await Promise.all([
+      supabase
+        .from('subscriptions')
+        .select('*')
+        .eq('fan_id', user.id)
+        .eq('creator_id', creator.id),
+      supabase
+        .from('post_purchases')
+        .select('*')
+        .eq('fan_id', user.id),
+    ])
+    subscriptions = subs || []
+    purchases = purcs || []
+  }
+
+  const viewerId = user?.id || null
+
+  // Compute access for each post (admins always have full access)
+  const postsWithAccess = (posts || []).map((post: Post) => {
+    const access = isAdmin || hasPostAccess(post, viewerId, creator.id, subscriptions, purchases)
+    return { post, hasAccess: access }
+  })
+
+  const subscribed = user
+    ? isActiveSubscriber(user.id, creator.id, subscriptions)
+    : false
+
+  // Get signed URLs for accessible posts (server-side only)
+  const postsWithUrls = await Promise.all(
+    postsWithAccess.map(async ({ post, hasAccess }) => {
+      let mediaUrls: string[] = []
+      let previewUrls: string[] = []
+
+      // Preview URLs (from public 'previews' bucket) — for blurred overlay
+      if (post.preview_paths?.length > 0) {
+        previewUrls = post.preview_paths.map(
+          (path: string) =>
+            `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/previews/${path}`
+        )
+      }
+
+      if (hasAccess && post.media_paths?.length > 0) {
+        // Generate signed URLs server-side
+        const { data } = await supabase.storage
+          .from('originals')
+          .createSignedUrls(post.media_paths, 3600) // 1hr expiry
+        mediaUrls = data?.map((d) => d.signedUrl).filter(Boolean) as string[] || []
+      }
+
+      return { post, hasAccess, mediaUrls, previewUrls }
+    })
+  )
+
+  return (
+    <CreatorProfileClient
+      creator={creator}
+      postsWithUrls={postsWithUrls}
+      viewerId={viewerId}
+      viewerProfile={viewerProfile}
+      isSubscribed={subscribed}
+      isAdmin={isAdmin}
+    />
+  )
+}
