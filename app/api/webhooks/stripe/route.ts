@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getStripe } from '@/lib/stripe'
 import { createClient } from '@supabase/supabase-js'
+import { maybeSendAutoMessage, isReturningSubscriber } from '@/lib/auto-message'
 
 // Service role client — no cookie handling needed in webhook
 function getServiceClient() {
@@ -91,6 +92,11 @@ export async function POST(request: NextRequest) {
           ? new Date(firstItem.current_period_end * 1000).toISOString()
           : null
 
+        // Detect returning subscriber BEFORE the upsert overwrites the status
+        const isReturn = event.type === 'customer.subscription.created'
+          ? await isReturningSubscriber(supabase, meta.fan_id, meta.creator_id)
+          : false
+
         await supabase.from('subscriptions').upsert(
           {
             fan_id: meta.fan_id,
@@ -145,6 +151,9 @@ export async function POST(request: NextRequest) {
               },
             })
           }
+
+          // Send creator's auto-message to new/returning paid subscriber
+          await maybeSendAutoMessage(supabase, meta.fan_id, meta.creator_id, isReturn)
         }
         break
       }

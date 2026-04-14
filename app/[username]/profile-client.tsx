@@ -200,7 +200,7 @@ export function CreatorProfileClient({
   const [subscribeError, setSubscribeError] = useState<string | null>(null)
   const [unsubLoading, setUnsubLoading] = useState(false)
   const [unsubError, setUnsubError] = useState<string | null>(null)
-  const [messageLoading, setMessageLoading] = useState(false)
+  // messageLoading removed — Message button now just navigates, no API call
 
   function handleFollowClick() {
     if (!viewerId) { router.push('/login'); return }
@@ -287,20 +287,10 @@ export function CreatorProfileClient({
     }
   }
 
-  async function handleMessage() {
+  function handleMessage() {
     if (!viewerId) { router.push('/login'); return }
-    setMessageLoading(true)
-    try {
-      const res = await fetch('/api/messages/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetId: creator.id }),
-      })
-      const data = await res.json()
-      if (data.conversationId) router.push(`/messages/${data.conversationId}`)
-    } finally {
-      setMessageLoading(false)
-    }
+    // Navigate to the compose page — conversation is only created on first send
+    router.push(`/messages/new?with=${creator.id}`)
   }
 
   return (
@@ -387,7 +377,6 @@ export function CreatorProfileClient({
                         variant="secondary"
                         size="md"
                         onClick={handleMessage}
-                        loading={messageLoading}
                       >
                         Message
                       </Button>

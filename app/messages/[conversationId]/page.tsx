@@ -35,7 +35,7 @@ export default async function ChatPage(props: PageProps<'/messages/[conversation
   // Fetch messages
   const { data: rawMessages } = await supabase
     .from('messages')
-    .select('id, sender_id, body, created_at')
+    .select('id, sender_id, body, media_paths, created_at')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: true })
     .limit(200)
@@ -61,6 +61,7 @@ export default async function ChatPage(props: PageProps<'/messages/[conversation
 
   const messages = (rawMessages || []).map((msg) => ({
     ...msg,
+    media_paths: (msg as { media_paths?: string[] }).media_paths ?? [],
     sender: profileMap[msg.sender_id] ?? null,
   }))
 

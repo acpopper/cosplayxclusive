@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { DeletePostButton } from './delete-button'
+import { PostActions } from './post-actions'
 
 export default async function PostsPage() {
   const supabase = await createClient()
@@ -37,53 +37,77 @@ export default async function PostsPage() {
       ) : (
         <div className="bg-bg-card border border-border rounded-2xl overflow-hidden">
           <div className="divide-y divide-border">
-            {posts.map((post) => (
-              <div key={post.id} className="flex items-center gap-4 px-4 py-3">
-                {/* Thumbnail */}
-                <div className="h-12 w-12 rounded-lg overflow-hidden bg-bg-elevated flex-shrink-0">
-                  {post.preview_paths?.length > 0 ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/previews/${post.preview_paths[0]}`}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <div className="h-full w-full flex items-center justify-center text-text-muted text-xs">
-                      📷
-                    </div>
-                  )}
-                </div>
-
-                {/* Caption */}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-text-primary truncate">
-                    {post.caption || <span className="text-text-muted italic">No caption</span>}
-                  </p>
-                  <p className="text-xs text-text-muted mt-0.5">
-                    {new Date(post.published_at).toLocaleDateString()} ·{' '}
-                    {post.media_paths?.length || 0} image{post.media_paths?.length !== 1 ? 's' : ''}
-                  </p>
-                </div>
-
-                {/* Access badge */}
-                <Badge
-                  variant={
-                    post.access_type === 'free'
-                      ? 'muted'
-                      : post.access_type === 'ppv'
-                      ? 'warning'
-                      : 'accent'
-                  }
-                  className="text-xs capitalize hidden sm:flex flex-shrink-0"
+            {posts.map((post) => {
+              const isPublished = post.published !== false // default true for old rows
+              return (
+                <div
+                  key={post.id}
+                  className={[
+                    'flex items-center gap-3 px-4 py-3 transition-colors',
+                    !isPublished ? 'opacity-60' : '',
+                  ].join(' ')}
                 >
-                  {post.access_type === 'ppv' ? `PPV $${post.price_usd}` : post.access_type.replace('_', ' ')}
-                </Badge>
+                  {/* Thumbnail */}
+                  <div className="h-12 w-12 rounded-lg overflow-hidden bg-bg-elevated flex-shrink-0 relative">
+                    {post.preview_paths?.length > 0 ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/previews/${post.preview_paths[0]}`}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="h-full w-full flex items-center justify-center text-text-muted text-xs">
+                        📷
+                      </div>
+                    )}
+                    {/* Unpublished overlay dot */}
+                    {!isPublished && (
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                        <span className="text-[10px] font-bold text-white/90 leading-none">HIDDEN</span>
+                      </div>
+                    )}
+                  </div>
 
-                {/* Delete */}
-                <DeletePostButton postId={post.id} />
-              </div>
-            ))}
+                  {/* Caption + meta */}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-text-primary truncate">
+                      {post.caption || <span className="text-text-muted italic">No caption</span>}
+                    </p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-xs text-text-muted">
+                        {new Date(post.published_at).toLocaleDateString()} ·{' '}
+                        {post.media_paths?.length || 0} image{post.media_paths?.length !== 1 ? 's' : ''}
+                      </span>
+                      {!isPublished && (
+                        <span className="text-[10px] font-semibold text-warning bg-warning/10 px-1.5 py-0.5 rounded-full">
+                          Unpublished
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Access badge */}
+                  <Badge
+                    variant={
+                      post.access_type === 'free'
+                        ? 'muted'
+                        : post.access_type === 'ppv'
+                        ? 'warning'
+                        : 'accent'
+                    }
+                    className="text-xs capitalize hidden sm:flex flex-shrink-0"
+                  >
+                    {post.access_type === 'ppv'
+                      ? `PPV $${post.price_usd}`
+                      : post.access_type.replace('_', ' ')}
+                  </Badge>
+
+                  {/* Actions: Edit / Publish / Delete */}
+                  <PostActions postId={post.id} published={isPublished} />
+                </div>
+              )
+            })}
           </div>
         </div>
       )}

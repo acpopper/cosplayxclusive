@@ -36,12 +36,19 @@ export default async function CreatorProfilePage(props: PageProps<'/[username]'>
     notFound()
   }
 
-  // Get posts
-  const { data: posts } = await supabase
+  // Get posts — owner and admin see all (including unpublished); everyone else only sees published
+  const isOwner = viewerProfile?.id === creator.id
+  let postsQuery = supabase
     .from('posts')
     .select('*')
     .eq('creator_id', creator.id)
     .order('published_at', { ascending: false })
+
+  if (!isAdmin && !isOwner) {
+    postsQuery = postsQuery.eq('published', true)
+  }
+
+  const { data: posts } = await postsQuery
 
   // If viewer is logged in, get their subscriptions and purchases
   let subscriptions: Subscription[] = []

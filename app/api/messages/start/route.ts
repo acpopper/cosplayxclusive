@@ -1,36 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 
+/**
+ * POST /api/messages/start
+ * Creates a conversation (if one doesn't already exist) and sends the first message.
+ * A conversation is ONLY created when a message body is provided — no empty chats.
+ */
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const { targetId } = await request.json()
+  const { targetId, body } = await request.json() as { targetId: string; body: string }
 
   if (!targetId || targetId === user.id) {
     return NextResponse.json({ error: 'Invalid target' }, { status: 400 })
   }
+  if (!body?.trim()) {
+    return NextResponse.json({ error: 'Message body required' }, { status: 400 })
+  }
 
-  // Verify target user exists
+  // Verify target exists
   const { data: target } = await supabase
     .from('profiles')
     .select('id')
     .eq('id', targetId)
     .single()
 
-  if (!target) {
-    return NextResponse.json({ error: 'User not found' }, { status: 404 })
-  }
+  if (!target) return NextResponse.json({ error: 'User not found' }, { status: 404 })
 
-  // Normalize participant order (lexicographic) to keep UNIQUE constraint happy
+  // Use service client for the inserts (conversation + message) to bypass RLS edge cases
+  const service = createServiceClient()
+
+  // Normalize participant order
   const [participantA, participantB] = [user.id, targetId].sort()
 
-  // Check if conversation already exists
-  const { data: existing } = await supabase
+  // Find or create conversation
+  let conversationId: string
+
+  const { data: existing } = await service
     .from('conversations')
     .select('id')
     .eq('participant_a', participantA)
@@ -38,19 +46,27 @@ export async function POST(request: NextRequest) {
     .maybeSingle()
 
   if (existing) {
-    return NextResponse.json({ conversationId: existing.id })
+    conversationId = existing.id
+  } else {
+    const { data: created, error } = await service
+      .from('conversations')
+      .insert({ participant_a: participantA, participant_b: participantB })
+      .select('id')
+      .single()
+    if (error || !created) {
+      return NextResponse.json({ error: error?.message ?? 'Failed to create conversation' }, { status: 500 })
+    }
+    conversationId = created.id
   }
 
-  // Create new conversation
-  const { data: created, error } = await supabase
-    .from('conversations')
-    .insert({ participant_a: participantA, participant_b: participantB })
-    .select('id')
-    .single()
+  // Send the first message
+  const { error: msgErr } = await service
+    .from('messages')
+    .insert({ conversation_id: conversationId, sender_id: user.id, body: body.trim() })
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+  if (msgErr) {
+    return NextResponse.json({ error: msgErr.message }, { status: 500 })
   }
 
-  return NextResponse.json({ conversationId: created.id })
+  return NextResponse.json({ conversationId })
 }

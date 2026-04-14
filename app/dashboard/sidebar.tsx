@@ -12,6 +12,7 @@ interface SidebarProps {
 const navItems = [
   { href: '/dashboard', label: 'Overview', icon: '◈' },
   { href: '/dashboard/posts', label: 'Posts', icon: '◉' },
+  { href: '/dashboard/messaging', label: 'Messaging', icon: '✉' },
   { href: '/dashboard/profile', label: 'Profile', icon: '◎' },
   { href: '/dashboard/connect', label: 'Payouts', icon: '◇' },
 ]

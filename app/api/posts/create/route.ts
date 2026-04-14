@@ -1,5 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
+import sharp from 'sharp'
+
+/**
+ * Generate a genuinely degraded preview image:
+ * - Resize to max 600px wide (reduce resolution)
+ * - Apply a heavy gaussian blur (σ=20)
+ * - Encode as JPEG at 40% quality
+ *
+ * This means the previews bucket only ever holds a visually obscured version.
+ * Even if someone obtains the public URL, the full content is not recoverable.
+ */
+async function makePreviewBuffer(buffer: Buffer): Promise<Buffer> {
+  return sharp(buffer)
+    .resize({ width: 600, withoutEnlargement: true })
+    .blur(20)
+    .jpeg({ quality: 40 })
+    .toBuffer()
+}
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
@@ -40,6 +58,7 @@ export async function POST(request: NextRequest) {
     const path = `${user.id}/${Date.now()}_${i}.${ext}`
     const buffer = Buffer.from(await file.arrayBuffer())
 
+    // Upload original (private) to 'originals' bucket
     const { error: origErr } = await service.storage
       .from('originals')
       .upload(path, buffer, { contentType: file.type, cacheControl: '3600', upsert: false })
@@ -49,11 +68,18 @@ export async function POST(request: NextRequest) {
     }
     mediaPaths.push(path)
 
-    const { error: prevErr } = await service.storage
-      .from('previews')
-      .upload(path, buffer, { contentType: file.type, cacheControl: '3600', upsert: false })
-
-    if (!prevErr) previewPaths.push(path)
+    // Generate a genuinely blurred/degraded preview and upload to public 'previews' bucket
+    // Previews are always stored as JPEG regardless of original format
+    const previewPath = `${user.id}/${Date.now()}_${i}_preview.jpg`
+    try {
+      const previewBuffer = await makePreviewBuffer(buffer)
+      const { error: prevErr } = await service.storage
+        .from('previews')
+        .upload(previewPath, previewBuffer, { contentType: 'image/jpeg', cacheControl: '3600', upsert: false })
+      if (!prevErr) previewPaths.push(previewPath)
+    } catch {
+      // Preview generation failed — skip (post still works, locked posts just won't show a thumbnail)
+    }
   }
 
   const postData: Record<string, unknown> = {

@@ -56,19 +56,49 @@ export interface PostPurchase {
   created_at: string
 }
 
+export type NotificationType =
+  | 'new_subscriber'
+  | 'post_liked'
+  | 'post_commented'
+  | 'post_tipped'
+  | 'post_like_milestone'
+  | 'post_comment_milestone'
+  | 'post_tip_milestone'
+
+export interface NotificationActor {
+  user_id: string
+  username: string
+  display_name: string | null
+  avatar_url: string | null
+}
+
+export interface NotificationPayload {
+  // new_subscriber
+  fan_id?: string
+  fan_username?: string
+  fan_display_name?: string | null
+  fan_avatar_url?: string | null
+  sub_type?: 'free' | 'paid'
+  // post events (liked / commented / tipped)
+  post_id?: string
+  post_caption?: string | null
+  actors?: NotificationActor[]
+  actor_count?: number
+  sample_comment?: string
+  total_tip_amount?: number
+  // milestones
+  milestone?: number
+}
+
 export interface Notification {
   id: string
   user_id: string
-  type: 'new_subscriber'
-  payload: {
-    fan_id: string
-    fan_username: string
-    fan_display_name: string | null
-    fan_avatar_url: string | null
-    sub_type: 'free' | 'paid'
-  }
+  type: NotificationType
+  group_key: string | null
+  payload: NotificationPayload
   read_at: string | null
   created_at: string
+  last_activity_at: string
 }
 
 export interface Conversation {
@@ -84,6 +114,41 @@ export interface Message {
   sender_id: string
   body: string
   created_at: string
+}
+
+export interface FeedPost {
+  id: string
+  creator_id: string
+  caption: string | null
+  access_type: AccessType
+  price_usd: number | null
+  published_at: string
+  creator: {
+    id: string
+    username: string
+    display_name: string | null
+    avatar_url: string | null
+  }
+  mediaUrls: string[]       // signed private URLs (or preview if locked)
+  previewUrls: string[]     // always-available blurred previews
+  hasAccess: boolean
+  likeCount: number
+  hasLiked: boolean
+  commentCount: number
+  totalTipped: number
+}
+
+export interface FeedComment {
+  id: string
+  post_id: string
+  user_id: string
+  body: string
+  created_at: string
+  profile: {
+    username: string
+    display_name: string | null
+    avatar_url: string | null
+  } | null
 }
 
 export interface Transaction {

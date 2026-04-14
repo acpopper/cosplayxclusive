@@ -15,6 +15,7 @@ interface MessageItem {
   id: string
   sender_id: string
   body: string
+  media_paths: string[]   // paths in previews/chat-media/ (public bucket)
   created_at: string
   sender: SenderProfile | null
 }
@@ -87,10 +88,10 @@ export function ChatClient({
           filter: `conversation_id=eq.${conversationId}`,
         },
         (payload) => {
-          const row = payload.new as { id: string; sender_id: string; body: string; created_at: string }
+          const row = payload.new as { id: string; sender_id: string; body: string; media_paths: string[]; created_at: string }
           setMessages((prev) => {
             if (prev.some((m) => m.id === row.id)) return prev
-            return [...prev, { ...row, sender: participantMap[row.sender_id] ?? null }]
+            return [...prev, { ...row, media_paths: row.media_paths ?? [], sender: participantMap[row.sender_id] ?? null }]
           })
           // Keep read pointer current while chat is open
           markRead()
@@ -202,16 +203,35 @@ export function ChatClient({
                   </div>
                 )}
 
-                <div
-                  className={[
-                    'rounded-2xl px-3 py-2 text-sm leading-relaxed',
-                    isMe
-                      ? 'bg-accent text-white rounded-tr-sm'
-                      : 'bg-bg-elevated text-text-primary rounded-tl-sm',
-                  ].join(' ')}
-                >
-                  {msg.body}
-                </div>
+                {/* Images (auto-messages or future media) */}
+                {msg.media_paths?.length > 0 && (
+                  <div className={['flex flex-col gap-1 mb-1', msg.media_paths.length > 1 ? 'grid grid-cols-2' : ''].join(' ')}>
+                    {msg.media_paths.map((path, idx) => (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        key={idx}
+                        src={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/previews/${path}`}
+                        alt=""
+                        className="rounded-xl max-h-64 w-full object-cover cursor-pointer"
+                        onClick={() => window.open(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/previews/${path}`, '_blank')}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* Text bubble — only render if there's text */}
+                {msg.body && (
+                  <div
+                    className={[
+                      'rounded-2xl px-3 py-2 text-sm leading-relaxed',
+                      isMe
+                        ? 'bg-accent text-white rounded-tr-sm'
+                        : 'bg-bg-elevated text-text-primary rounded-tl-sm',
+                    ].join(' ')}
+                  >
+                    {msg.body}
+                  </div>
+                )}
                 <span className="text-[11px] text-text-muted mt-0.5">{timeLabel}</span>
               </div>
             </div>

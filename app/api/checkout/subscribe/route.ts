@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { getStripe } from '@/lib/stripe'
+import { maybeSendAutoMessage, isReturningSubscriber } from '@/lib/auto-message'
 
 export async function POST(request: NextRequest) {
   try {
@@ -64,6 +65,10 @@ export async function POST(request: NextRequest) {
     // Free creator — grant access directly without Stripe
     if (creator.subscription_price_usd === 0) {
       const service = createServiceClient()
+
+      // Detect returning subscriber BEFORE inserting new active record
+      const isReturn = await isReturningSubscriber(service, user.id, creatorId)
+
       const { error: insertError } = await service
         .from('subscriptions')
         .insert({
@@ -87,6 +92,9 @@ export async function POST(request: NextRequest) {
           sub_type: 'free',
         },
       })
+
+      // Send creator's auto-message (if configured)
+      await maybeSendAutoMessage(service, user.id, creatorId, isReturn)
 
       return NextResponse.json({ url: successUrl })
     }

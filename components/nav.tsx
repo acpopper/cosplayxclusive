@@ -44,8 +44,8 @@ export function Nav({ profile }: NavProps) {
         .from('notifications')
         .select('*')
         .eq('user_id', profile.id)
-        .order('created_at', { ascending: false })
-        .limit(20)
+        .order('last_activity_at', { ascending: false })
+        .limit(30)
 
       const all = (notifData ?? []) as Notification[]
       setNotifs(all)
@@ -96,7 +96,7 @@ export function Nav({ profile }: NavProps) {
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
         {/* Logo */}
         <Link
-          href={profile ? '/explore' : '/'}
+          href={profile ? (profile.role === 'fan' ? '/home' : '/explore') : '/'}
           className="flex items-center gap-2 font-semibold text-text-primary"
         >
           <span className="text-accent text-xl">✦</span>
@@ -108,6 +108,21 @@ export function Nav({ profile }: NavProps) {
         <nav className="flex items-center gap-1">
           {profile ? (
             <>
+              {/* Home feed — fans only */}
+              {profile.role === 'fan' && (
+                <Link
+                  href="/home"
+                  className={[
+                    'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+                    pathname.startsWith('/home')
+                      ? 'text-text-primary bg-bg-elevated'
+                      : 'text-text-secondary hover:text-text-primary hover:bg-bg-elevated',
+                  ].join(' ')}
+                >
+                  Home
+                </Link>
+              )}
+
               <Link
                 href="/explore"
                 className={[
@@ -206,10 +221,59 @@ export function Nav({ profile }: NavProps) {
                           No notifications yet
                         </div>
                       ) : (
-                        <ul className="max-h-80 overflow-y-auto divide-y divide-border">
+                        <ul className="max-h-96 overflow-y-auto divide-y divide-border">
                           {notifs.map((n) => {
                             const p = n.payload
-                            const isFree = p.sub_type === 'free'
+
+                            // ── Resolve avatar + primary text ────────────────
+                            let avatarUrl: string | null = null
+                            let avatarInitial = '?'
+                            let emoji: string | null = null
+                            let mainText: React.ReactNode = null
+                            let subText: string | null = null
+
+                            if (n.type === 'new_subscriber') {
+                              avatarUrl = p.fan_avatar_url ?? null
+                              avatarInitial = (p.fan_display_name || p.fan_username || '?')[0].toUpperCase()
+                              const name = p.fan_display_name || p.fan_username
+                              mainText = <><span className="font-semibold">{name}</span>{' '}{p.sub_type === 'free' ? 'started following you' : 'subscribed to you'}</>
+                            } else if (n.type === 'post_liked' || n.type === 'post_commented' || n.type === 'post_tipped') {
+                              const actors = p.actors ?? []
+                              const count = p.actor_count ?? actors.length
+                              const first = actors[0]
+                              avatarUrl = first?.avatar_url ?? null
+                              avatarInitial = (first?.display_name || first?.username || '?')[0]?.toUpperCase() ?? '?'
+                              const firstName = first?.display_name || first?.username || 'Someone'
+                              const othersCount = count - 1
+
+                              if (n.type === 'post_liked') {
+                                mainText = othersCount > 0
+                                  ? <><span className="font-semibold">{firstName}</span>{' and '}<span className="font-semibold">{othersCount} {othersCount === 1 ? 'other' : 'others'}</span>{' liked your post'}</>
+                                  : <><span className="font-semibold">{firstName}</span>{' liked your post'}</>
+                              } else if (n.type === 'post_commented') {
+                                mainText = othersCount > 0
+                                  ? <><span className="font-semibold">{firstName}</span>{' and '}<span className="font-semibold">{othersCount} {othersCount === 1 ? 'other' : 'others'}</span>{' commented on your post'}</>
+                                  : <><span className="font-semibold">{firstName}</span>{' commented on your post'}</>
+                                if (p.sample_comment) subText = `"${p.sample_comment}"`
+                              } else if (n.type === 'post_tipped') {
+                                const total = p.total_tip_amount
+                                mainText = othersCount > 0
+                                  ? <><span className="font-semibold">{firstName}</span>{' and '}<span className="font-semibold">{othersCount} {othersCount === 1 ? 'other' : 'others'}</span>{' tipped'}{total ? <> <span className="text-yellow-400 font-semibold">${total.toFixed(0)}</span> total</> : ''}</>
+                                  : <><span className="font-semibold">{firstName}</span>{' sent a tip'}{total ? <> <span className="text-yellow-400 font-semibold">${total.toFixed(0)}</span></> : ''}</>
+                              }
+                            } else if (n.type === 'post_like_milestone') {
+                              emoji = '🎉'
+                              mainText = <>Your post reached <span className="font-semibold">{p.milestone} likes</span>!</>
+                            } else if (n.type === 'post_comment_milestone') {
+                              emoji = '💬'
+                              mainText = <>Your post reached <span className="font-semibold">{p.milestone} comments</span>!</>
+                            } else if (n.type === 'post_tip_milestone') {
+                              emoji = '💰'
+                              mainText = <>Your post received <span className="font-semibold">{p.milestone} tips</span>!</>
+                            }
+
+                            const timestamp = n.last_activity_at || n.created_at
+
                             return (
                               <li
                                 key={n.id}
@@ -218,29 +282,33 @@ export function Nav({ profile }: NavProps) {
                                   !n.read_at ? 'bg-accent/5' : '',
                                 ].join(' ')}
                               >
-                                {/* Avatar */}
-                                <div className="h-8 w-8 rounded-full overflow-hidden bg-bg-elevated flex-shrink-0 mt-0.5">
-                                  {p.fan_avatar_url ? (
-                                    // eslint-disable-next-line @next/next/no-img-element
-                                    <img src={p.fan_avatar_url} alt="" className="h-full w-full object-cover" />
-                                  ) : (
-                                    <div className="h-full w-full flex items-center justify-center bg-gradient-to-br from-accent to-accent-alt">
-                                      <span className="text-xs font-bold text-white">
-                                        {(p.fan_display_name || p.fan_username || '?')[0].toUpperCase()}
-                                      </span>
-                                    </div>
-                                  )}
-                                </div>
+                                {/* Avatar or emoji icon */}
+                                {emoji ? (
+                                  <div className="h-8 w-8 rounded-full bg-bg-elevated flex items-center justify-center flex-shrink-0 mt-0.5 text-base">
+                                    {emoji}
+                                  </div>
+                                ) : (
+                                  <div className="h-8 w-8 rounded-full overflow-hidden bg-bg-elevated flex-shrink-0 mt-0.5">
+                                    {avatarUrl ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
+                                    ) : (
+                                      <div className="h-full w-full flex items-center justify-center bg-gradient-to-br from-accent to-accent-alt">
+                                        <span className="text-xs font-bold text-white">{avatarInitial}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+
                                 {/* Text */}
                                 <div className="flex-1 min-w-0">
-                                  <p className="text-sm text-text-primary leading-snug">
-                                    <span className="font-semibold">
-                                      {p.fan_display_name || p.fan_username}
-                                    </span>{' '}
-                                    {isFree ? 'started following you' : 'subscribed to you'}
-                                  </p>
-                                  <p className="text-xs text-text-muted mt-0.5">{timeAgo(n.created_at)}</p>
+                                  <p className="text-sm text-text-primary leading-snug">{mainText}</p>
+                                  {subText && (
+                                    <p className="text-xs text-text-muted mt-0.5 truncate italic">{subText}</p>
+                                  )}
+                                  <p className="text-xs text-text-muted mt-0.5">{timeAgo(timestamp)}</p>
                                 </div>
+
                                 {/* Unread dot */}
                                 {!n.read_at && (
                                   <span className="mt-1.5 h-2 w-2 rounded-full bg-accent flex-shrink-0" />
