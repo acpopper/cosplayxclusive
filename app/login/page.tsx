@@ -65,6 +65,13 @@ function LoginForm() {
       <Button type="submit" loading={loading} size="lg" className="w-full mt-1">
         Sign in
       </Button>
+
+      <Link
+        href="/forgot-password"
+        className="text-center text-xs text-text-muted hover:text-accent transition-colors -mt-2"
+      >
+        Forgot your password?
+      </Link>
     </form>
   )
 }

@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { createServiceClient } from '@/lib/supabase/server'
 import { ModerationTabs } from '../tabs'
 import { Badge } from '@/components/ui/badge'
+import { ReportActions } from './report-actions'
 
 interface ReportRow {
   id: string
@@ -10,6 +11,7 @@ interface ReportRow {
   reason: string
   details: string | null
   created_at: string
+  resolved_at: string | null
 }
 
 interface PostRow {
@@ -35,14 +37,25 @@ const REASON_LABELS: Record<string, string> = {
   other:    'Other',
 }
 
-export default async function ReportsPage() {
+interface ReportsPageProps {
+  searchParams: Promise<{ show?: string }>
+}
+
+export default async function ReportsPage({ searchParams }: ReportsPageProps) {
+  const sp = await searchParams
+  const showResolved = sp.show === 'resolved'
+
   const service = createServiceClient()
 
-  const { data: reports } = await service
+  let reportsQuery = service
     .from('post_reports')
-    .select('id, post_id, reporter_id, reason, details, created_at')
+    .select('id, post_id, reporter_id, reason, details, created_at, resolved_at')
     .order('created_at', { ascending: false })
     .limit(200)
+
+  if (!showResolved) reportsQuery = reportsQuery.is('resolved_at', null)
+
+  const { data: reports } = await reportsQuery
 
   const reportRows = (reports ?? []) as ReportRow[]
 
@@ -101,12 +114,37 @@ export default async function ReportsPage() {
         <h1 className="text-2xl font-bold text-text-primary">Moderation</h1>
         <p className="text-sm text-text-secondary mt-1">Posts reported by users</p>
       </div>
-      <ModerationTabs reportsCount={postIds.length} />
+      <ModerationTabs reportsCount={showResolved ? undefined : postIds.length} />
+
+      <div className="flex items-center justify-end mb-3">
+        <div className="inline-flex rounded-lg border border-border overflow-hidden text-xs">
+          <Link
+            href="/admin/moderation/reports"
+            className={[
+              'px-3 py-1.5 transition-colors',
+              !showResolved ? 'bg-bg-elevated text-text-primary' : 'text-text-muted hover:text-text-secondary',
+            ].join(' ')}
+          >
+            Open
+          </Link>
+          <Link
+            href="/admin/moderation/reports?show=resolved"
+            className={[
+              'px-3 py-1.5 border-l border-border transition-colors',
+              showResolved ? 'bg-bg-elevated text-text-primary' : 'text-text-muted hover:text-text-secondary',
+            ].join(' ')}
+          >
+            Resolved
+          </Link>
+        </div>
+      </div>
 
       {postIds.length === 0 ? (
         <div className="text-center py-16 text-text-muted bg-bg-card border border-border rounded-2xl">
           <p className="text-3xl mb-3">✓</p>
-          <p className="font-medium text-text-secondary">No reports</p>
+          <p className="font-medium text-text-secondary">
+            {showResolved ? 'No resolved reports' : 'No reports'}
+          </p>
           <p className="text-xs text-text-muted mt-1">User reports on posts will appear here.</p>
         </div>
       ) : (
@@ -119,6 +157,8 @@ export default async function ReportsPage() {
             const previewUrl = previewPath
               ? `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/previews/${previewPath}`
               : null
+
+            const allResolved = entry.reports.every((r) => r.resolved_at)
 
             return (
               <div key={postId} className="px-4 py-4">
@@ -188,6 +228,12 @@ export default async function ReportsPage() {
                       )}
                     </ul>
                   </div>
+
+                  {allResolved ? (
+                    <Badge variant="muted" className="text-xs flex-shrink-0">Resolved</Badge>
+                  ) : (
+                    <ReportActions postId={postId} />
+                  )}
                 </div>
               </div>
             )

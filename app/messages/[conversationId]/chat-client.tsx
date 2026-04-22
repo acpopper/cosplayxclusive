@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
 interface SenderProfile {
@@ -50,11 +51,51 @@ export function ChatClient({
   currentUserProfile,
   otherProfile,
 }: ChatClientProps) {
+  const router = useRouter()
   const [messages, setMessages] = useState<MessageItem[]>(initialMessages)
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const supabase = useMemo(() => createClient(), [])
+
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [blockModal, setBlockModal] = useState(false)
+  const [blockLoading, setBlockLoading] = useState(false)
+  const [blockError, setBlockError] = useState('')
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [menuOpen])
+
+  async function handleBlock() {
+    if (!otherProfile) return
+    setBlockLoading(true)
+    setBlockError('')
+    const res = await fetch('/api/user/block', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetId: otherProfile.id }),
+    })
+    setBlockLoading(false)
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}))
+      setBlockError(json.error ?? 'Could not block user.')
+      return
+    }
+    setBlockModal(false)
+    router.push('/messages')
+    router.refresh()
+  }
+
+  const canBlock = otherProfile && otherProfile.role !== 'admin' && currentUserProfile.role !== 'admin'
 
   // Build a lookup for resolving sender profiles from realtime payloads
   const participantMap = useMemo<Record<string, SenderProfile>>(() => {
@@ -129,6 +170,7 @@ export function ChatClient({
   }
 
   return (
+    <>
     <div className="flex flex-col flex-1 mx-auto w-full max-w-2xl px-4 pb-6">
       {/* Other user header */}
       {otherProfile && (
@@ -145,7 +187,7 @@ export function ChatClient({
               </div>
             )}
           </div>
-          <div>
+          <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <span className="text-sm font-semibold text-text-primary">
                 {otherProfile.display_name || otherProfile.username}
@@ -154,6 +196,30 @@ export function ChatClient({
             </div>
             <p className="text-xs text-text-muted">@{otherProfile.username}</p>
           </div>
+
+          {canBlock && (
+            <div className="relative" ref={menuRef}>
+              <button
+                onClick={() => setMenuOpen((o) => !o)}
+                className="h-8 w-8 flex items-center justify-center rounded-full text-text-muted hover:text-text-primary hover:bg-bg-elevated transition-colors"
+                aria-label="Conversation options"
+              >
+                <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M10 3a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3z" />
+                </svg>
+              </button>
+              {menuOpen && (
+                <div className="absolute right-0 top-full mt-1 w-40 bg-bg-card border border-border rounded-xl shadow-2xl overflow-hidden z-20">
+                  <button
+                    onClick={() => { setMenuOpen(false); setBlockModal(true) }}
+                    className="w-full px-3 py-2.5 text-left text-sm text-error hover:bg-error/10 transition-colors"
+                  >
+                    Block user
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -263,5 +329,50 @@ export function ChatClient({
         </button>
       </div>
     </div>
+
+    {blockModal && otherProfile && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+        onClick={() => { setBlockModal(false); setBlockError('') }}
+      >
+        <div
+          className="bg-bg-card border border-border rounded-2xl w-full max-w-sm shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="p-6">
+            <div className="text-3xl mb-3">🚫</div>
+            <h2 className="text-lg font-bold text-text-primary mb-2">
+              Block {otherProfile.display_name || otherProfile.username}?
+            </h2>
+            <p className="text-sm text-text-secondary mb-1">
+              You won&apos;t see their posts or profile, and neither of you will be able to send messages.
+            </p>
+            <p className="text-xs text-text-muted mb-6">
+              You can unblock them anytime from your settings.
+            </p>
+
+            {blockError && <p className="text-xs text-error mb-3">{blockError}</p>}
+
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={handleBlock}
+                disabled={blockLoading}
+                className="w-full py-2.5 rounded-xl bg-error/10 text-error border border-error/20 text-sm font-medium hover:bg-error/20 transition-colors disabled:opacity-50"
+              >
+                {blockLoading ? 'Blocking…' : 'Yes, block user'}
+              </button>
+              <button
+                onClick={() => { setBlockModal(false); setBlockError('') }}
+                disabled={blockLoading}
+                className="w-full py-2.5 rounded-xl bg-bg-elevated border border-border text-text-secondary text-sm font-medium hover:text-text-primary transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   )
 }
