@@ -46,6 +46,7 @@ export default async function EditPostPage(props: PageProps<'/dashboard/posts/[p
         existingMediaPaths={post.media_paths ?? []}
         existingPreviewPaths={post.preview_paths ?? []}
         existingPreviewUrls={previewUrls}
+        existingMediaTypes={(post.media_paths ?? []).map((_: string, i: number) => (post.media_types ?? [])[i] ?? 'image')}
       />
     </div>
   )

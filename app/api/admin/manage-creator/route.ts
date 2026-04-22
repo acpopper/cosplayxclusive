@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
     .from('profiles')
     .update({ creator_status: newStatus })
     .eq('id', creatorId)
-    .eq('role', 'creator')
+    .not('creator_status', 'is', null)
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })

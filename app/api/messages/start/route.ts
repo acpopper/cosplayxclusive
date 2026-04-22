@@ -32,6 +32,24 @@ export async function POST(request: NextRequest) {
   // Use service client for the inserts (conversation + message) to bypass RLS edge cases
   const service = createServiceClient()
 
+  // Block check — either direction
+  const { data: blockRow } = await service
+    .from('user_blocks')
+    .select('blocker_id')
+    .or(
+      `and(blocker_id.eq.${user.id},blocked_id.eq.${targetId}),` +
+      `and(blocker_id.eq.${targetId},blocked_id.eq.${user.id})`,
+    )
+    .limit(1)
+    .maybeSingle()
+
+  if (blockRow) {
+    return NextResponse.json(
+      { error: 'You cannot message this user.' },
+      { status: 403 },
+    )
+  }
+
   // Normalize participant order
   const [participantA, participantB] = [user.id, targetId].sort()
 

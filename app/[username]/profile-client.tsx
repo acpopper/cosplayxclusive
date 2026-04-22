@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import type { Profile, Post } from '@/lib/types'
@@ -202,6 +202,42 @@ export function CreatorProfileClient({
   const [unsubError, setUnsubError] = useState<string | null>(null)
   // messageLoading removed — Message button now just navigates, no API call
 
+  // Kebab menu + block flow
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [blockModalOpen, setBlockModalOpen] = useState(false)
+  const [blockLoading, setBlockLoading] = useState(false)
+  const [blockError, setBlockError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [menuOpen])
+
+  async function handleBlock() {
+    setBlockLoading(true)
+    setBlockError(null)
+    const res = await fetch('/api/user/block', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetId: creator.id }),
+    })
+    setBlockLoading(false)
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}))
+      setBlockError(json.error ?? 'Could not block user.')
+      return
+    }
+    setBlockModalOpen(false)
+    router.refresh()
+  }
+
   function handleFollowClick() {
     if (!viewerId) { router.push('/login'); return }
     if (localSubscribed) {
@@ -381,6 +417,31 @@ export function CreatorProfileClient({
                         Message
                       </Button>
                     )}
+
+                    {/* Kebab menu — only for logged-in non-admin viewers looking at someone else */}
+                    {viewerId && !isAdmin && !isOwner && (
+                      <div className="relative" ref={menuRef}>
+                        <button
+                          onClick={() => setMenuOpen((o) => !o)}
+                          className="h-10 w-10 flex items-center justify-center rounded-xl border border-border bg-bg-elevated text-text-secondary hover:text-text-primary hover:border-accent/40 transition-colors"
+                          aria-label="More options"
+                        >
+                          <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M10 3a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3z" />
+                          </svg>
+                        </button>
+                        {menuOpen && (
+                          <div className="absolute right-0 top-full mt-1 w-40 bg-bg-card border border-border rounded-xl shadow-2xl overflow-hidden z-20">
+                            <button
+                              onClick={() => { setMenuOpen(false); setBlockModalOpen(true) }}
+                              className="w-full px-3 py-2.5 text-left text-sm text-error hover:bg-error/10 transition-colors"
+                            >
+                              Block user
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -465,6 +526,47 @@ export function CreatorProfileClient({
           loading={unsubLoading}
           error={unsubError}
         />
+      )}
+
+      {/* Block confirmation modal */}
+      {blockModalOpen && (
+        <Modal onClose={() => { setBlockModalOpen(false); setBlockError(null) }}>
+          <div className="p-6">
+            <div className="text-3xl mb-3">🚫</div>
+            <h2 className="text-lg font-bold text-text-primary mb-2">
+              Block {creator.display_name || creator.username}?
+            </h2>
+            <p className="text-sm text-text-secondary mb-1">
+              They won&apos;t be able to message you. You won&apos;t see their posts or profile.
+            </p>
+            <p className="text-xs text-text-muted mb-6">
+              You can unblock them anytime from your settings.
+            </p>
+
+            {blockError && <p className="text-xs text-error mb-3">{blockError}</p>}
+
+            <div className="flex flex-col gap-2">
+              <Button
+                size="md"
+                variant="danger"
+                onClick={handleBlock}
+                loading={blockLoading}
+                className="w-full"
+              >
+                Yes, block user
+              </Button>
+              <Button
+                size="md"
+                variant="secondary"
+                onClick={() => { setBlockModalOpen(false); setBlockError(null) }}
+                disabled={blockLoading}
+                className="w-full"
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
     </>
   )

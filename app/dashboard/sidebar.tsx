@@ -9,7 +9,7 @@ interface SidebarProps {
   profile: Profile
 }
 
-const navItems = [
+const approvedNavItems = [
   { href: '/dashboard', label: 'Overview', icon: '◈' },
   { href: '/dashboard/posts', label: 'Posts', icon: '◉' },
   { href: '/dashboard/messaging', label: 'Messaging', icon: '✉' },
@@ -17,8 +17,15 @@ const navItems = [
   { href: '/dashboard/connect', label: 'Payouts', icon: '◇' },
 ]
 
+const pendingNavItems = [
+  { href: '/dashboard', label: 'Application', icon: '◈' },
+  { href: '/dashboard/profile', label: 'Profile', icon: '◎' },
+]
+
 export function DashboardSidebar({ profile }: SidebarProps) {
   const pathname = usePathname()
+  const isApproved = profile.creator_status === 'approved'
+  const navItems = isApproved ? approvedNavItems : pendingNavItems
 
   return (
     <aside className="md:w-52 flex-shrink-0">
@@ -45,9 +52,11 @@ export function DashboardSidebar({ profile }: SidebarProps) {
               {profile.creator_status === 'approved' ? (
                 <Badge variant="success" className="text-xs py-0">Active</Badge>
               ) : profile.creator_status === 'pending' ? (
-                <Badge variant="warning" className="text-xs py-0">Pending</Badge>
-              ) : (
+                <Badge variant="warning" className="text-xs py-0">Pending review</Badge>
+              ) : profile.creator_status === 'rejected' ? (
                 <Badge variant="error" className="text-xs py-0">Rejected</Badge>
+              ) : (
+                <Badge variant="warning" className="text-xs py-0">Suspended</Badge>
               )}
             </div>
           </div>
@@ -74,8 +83,8 @@ export function DashboardSidebar({ profile }: SidebarProps) {
           })}
         </nav>
 
-        {/* View profile link */}
-        {profile.creator_status === 'approved' && (
+        {/* View profile link — approved only */}
+        {isApproved && (
           <div className="mt-3 pt-3 border-t border-border">
             <Link
               href={`/${profile.username}`}

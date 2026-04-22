@@ -26,11 +26,11 @@ export async function POST(request: NextRequest) {
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('role, creator_status')
+    .select('creator_status')
     .eq('id', user.id)
     .single()
 
-  if (!profile || profile.role !== 'creator') {
+  if (!profile || profile.creator_status !== 'approved') {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 

@@ -263,12 +263,12 @@ export default function LandingPage() {
               </h2>
               <p className="text-text-secondary mb-6 leading-relaxed">
                 Get exclusive access to your favorite cosplayers&apos; best work.
-                High-resolution photos, exclusive sets, and direct access — not the filtered
-                highlights from social media.
+                High-resolution photos, exclusive sets, and direct access — beyond the
+                filtered highlights you see elsewhere.
               </p>
               <ul className="space-y-3 mb-8">
                 {[
-                  'Full-res photo sets not on Instagram',
+                  'Full-resolution photo sets you won\u2019t find on public feeds',
                   'Behind-the-scenes & WIP content',
                   'Subscribe or buy individual posts',
                   'Cancel anytime, no questions asked',
@@ -322,17 +322,19 @@ export default function LandingPage() {
 
       {/* Footer */}
       <footer className="border-t border-border py-8 px-4">
-        <div className="mx-auto max-w-6xl flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-2 text-text-secondary text-sm">
+        <div className="mx-auto max-w-6xl flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-text-muted">
+          <div className="flex items-center gap-2">
             <span className="text-accent">✦</span>
-            <span>CosplayXclusive</span>
+            <span className="font-semibold text-text-secondary">CosplayXclusive</span>
+            <span className="hidden sm:inline">·</span>
+            <span className="hidden sm:inline">© {new Date().getFullYear()} Aquarix LLC. All rights reserved.</span>
           </div>
-          <p className="text-xs text-text-muted">© 2025 CosplayXclusive. All rights reserved.</p>
-          <div className="flex gap-4 text-xs text-text-muted">
-            <span className="hover:text-text-secondary cursor-pointer transition-colors">Terms</span>
-            <span className="hover:text-text-secondary cursor-pointer transition-colors">Privacy</span>
-            <span className="hover:text-text-secondary cursor-pointer transition-colors">Support</span>
+          <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
+            <Link href="/terms" className="hover:text-text-primary transition-colors">Terms &amp; Conditions</Link>
+            <Link href="/privacy" className="hover:text-text-primary transition-colors">Privacy Policy</Link>
+            <a href="mailto:support@cosplayxclusive.com" className="hover:text-text-primary transition-colors">Support</a>
           </div>
+          <p className="sm:hidden text-xs text-center">© {new Date().getFullYear()} Aquarix LLC. All rights reserved.</p>
         </div>
       </footer>
     </div>

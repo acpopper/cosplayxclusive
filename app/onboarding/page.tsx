@@ -23,7 +23,6 @@ export default function OnboardingPage() {
   const [displayName, setDisplayName] = useState('')
   const [bio, setBio] = useState('')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
-  const [subscriptionPrice, setSubscriptionPrice] = useState('4.99')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -31,10 +30,7 @@ export default function OnboardingPage() {
     async function load() {
       const supabase = createClient()
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) {
-        router.push('/login')
-        return
-      }
+      if (!user) { router.push('/login'); return }
       const { data } = await supabase
         .from('profiles')
         .select('*')
@@ -62,28 +58,15 @@ export default function OnboardingPage() {
     setError('')
     setLoading(true)
 
-    const updates: Partial<Profile> = {
-      display_name: displayName || profile.username,
-      bio: bio || null,
-      fandom_tags: selectedTags,
-      updated_at: new Date().toISOString(),
-    }
-
-    if (profile.role === 'creator') {
-      const price = parseFloat(subscriptionPrice)
-      if (isNaN(price) || price < 0) {
-        setError('Subscription price must be $0.00 or more')
-        setLoading(false)
-        return
-      }
-      updates.subscription_price_usd = price
-      updates.creator_status = 'pending'
-    }
-
     const supabase = createClient()
     const { error } = await supabase
       .from('profiles')
-      .update(updates)
+      .update({
+        display_name: displayName || profile.username,
+        bio: bio || null,
+        fandom_tags: selectedTags,
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', profile.id)
 
     if (error) {
@@ -92,7 +75,7 @@ export default function OnboardingPage() {
       return
     }
 
-    router.push(profile.role === 'creator' ? '/dashboard' : '/explore')
+    router.push('/home')
     router.refresh()
   }
 
@@ -109,14 +92,8 @@ export default function OnboardingPage() {
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <span className="text-accent text-3xl">✦</span>
-          <h1 className="mt-2 text-xl font-bold text-text-primary">
-            {profile.role === 'creator' ? 'Set up your creator profile' : 'Complete your profile'}
-          </h1>
-          <p className="mt-1 text-sm text-text-secondary">
-            {profile.role === 'creator'
-              ? 'Your profile is what fans will see first'
-              : 'Personalize your experience'}
-          </p>
+          <h1 className="mt-2 text-xl font-bold text-text-primary">Complete your profile</h1>
+          <p className="mt-1 text-sm text-text-secondary">Personalise your CosplayXclusive experience</p>
         </div>
 
         <div className="bg-bg-card border border-border rounded-2xl p-6 shadow-2xl">
@@ -129,19 +106,17 @@ export default function OnboardingPage() {
               maxLength={60}
             />
 
-            {profile.role === 'creator' && (
-              <Textarea
-                label="Bio"
-                placeholder="Tell fans about your cosplay style, characters you love, what they can expect..."
-                value={bio}
-                onChange={(e) => setBio(e.target.value)}
-                rows={3}
-                maxLength={500}
-              />
-            )}
+            <Textarea
+              label="Bio (optional)"
+              placeholder="Tell people a bit about yourself and what you love..."
+              value={bio}
+              onChange={(e) => setBio(e.target.value)}
+              rows={3}
+              maxLength={500}
+            />
 
             <div>
-              <p className="text-sm font-medium text-text-secondary mb-2">Fandoms & Interests</p>
+              <p className="text-sm font-medium text-text-secondary mb-2">Fandoms &amp; Interests</p>
               <div className="flex flex-wrap gap-2">
                 {FANDOM_TAGS.map((tag) => (
                   <button
@@ -161,30 +136,6 @@ export default function OnboardingPage() {
               </div>
             </div>
 
-            {profile.role === 'creator' && (
-              <div>
-                <Input
-                  label="Monthly Subscription Price (USD)"
-                  type="number"
-                  placeholder="4.99"
-                  value={subscriptionPrice}
-                  onChange={(e) => setSubscriptionPrice(e.target.value)}
-                  min="0"
-                  max="999"
-                  step="0.01"
-                  hint="Set to $0 for a free account — You keep ~80% after fees on paid plans"
-                />
-              </div>
-            )}
-
-            {profile.role === 'creator' && (
-              <div className="rounded-xl border border-warning/20 bg-warning/5 p-3">
-                <p className="text-xs text-warning/90">
-                  ⚡ Creator accounts require manual approval before going live. We&apos;ll review your profile and get back to you shortly.
-                </p>
-              </div>
-            )}
-
             {error && (
               <p className="text-sm text-error bg-error/10 border border-error/20 rounded-lg px-3 py-2">
                 {error}
@@ -192,10 +143,15 @@ export default function OnboardingPage() {
             )}
 
             <Button type="submit" loading={loading} size="lg" className="w-full">
-              {profile.role === 'creator' ? 'Submit for review' : 'Get started'}
+              Get started
             </Button>
           </form>
         </div>
+
+        <p className="mt-4 text-center text-xs text-text-muted">
+          Want to share content and earn?{' '}
+          <span className="text-text-secondary">You can apply to become a creator from your Settings anytime.</span>
+        </p>
       </div>
     </div>
   )

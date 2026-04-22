@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { Nav } from '@/components/nav'
+import { Footer } from '@/components/footer'
 import { CreatorsFilter } from './creators-filter'
 import type { Profile } from '@/lib/types'
 
@@ -21,14 +22,13 @@ export default async function ExplorePage() {
   const { data: creators } = await supabase
     .from('profiles')
     .select('id, username, display_name, bio, avatar_url, subscription_price_usd, fandom_tags, created_at')
-    .eq('role', 'creator')
     .eq('creator_status', 'approved')
 
   return (
-    <div className="min-h-screen bg-bg-base">
+    <div className="min-h-screen bg-bg-base flex flex-col">
       <Nav profile={viewerProfile} />
 
-      <main className="mx-auto max-w-6xl px-4 py-10">
+      <main className="mx-auto max-w-6xl w-full px-4 py-10 flex-1">
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-text-primary">Discover Creators</h1>
           <p className="mt-1 text-text-secondary text-sm">
@@ -46,6 +46,8 @@ export default async function ExplorePage() {
           <CreatorsFilter creators={creators} />
         )}
       </main>
+
+      <Footer />
     </div>
   )
 }

@@ -2,6 +2,7 @@
 
 import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -13,72 +14,150 @@ const ACCESS_OPTIONS: { value: AccessType; label: string; desc: string }[] = [
   { value: 'ppv', label: 'Pay Per View', desc: 'Fans pay a one-time price' },
 ]
 
+type MediaItem = {
+  type: 'image' | 'video'
+  file: File
+  localUrl: string
+}
+
+async function captureVideoThumbnail(file: File): Promise<Blob | null> {
+  return new Promise((resolve) => {
+    const video = document.createElement('video')
+    video.preload = 'metadata'
+    video.muted = true
+    video.playsInline = true
+    const url = URL.createObjectURL(file)
+    video.src = url
+
+    const cleanup = () => URL.revokeObjectURL(url)
+
+    video.addEventListener('loadedmetadata', () => {
+      video.currentTime = Math.min(1, video.duration * 0.1)
+    }, { once: true })
+
+    video.addEventListener('seeked', () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = video.videoWidth || 1280
+      canvas.height = video.videoHeight || 720
+      canvas.getContext('2d')?.drawImage(video, 0, 0)
+      canvas.toBlob((blob) => {
+        cleanup()
+        resolve(blob)
+      }, 'image/jpeg', 0.8)
+    }, { once: true })
+
+    video.addEventListener('error', () => { cleanup(); resolve(null) }, { once: true })
+  })
+}
+
 export function NewPostForm({ creatorId }: { creatorId: string }) {
+  void creatorId // passed by parent but auth is checked server-side
   const router = useRouter()
   const fileRef = useRef<HTMLInputElement>(null)
 
   const [caption, setCaption] = useState('')
   const [accessType, setAccessType] = useState<AccessType>('subscriber_only')
   const [ppvPrice, setPpvPrice] = useState('5.99')
-  const [files, setFiles] = useState<File[]>([])
-  const [previews, setPreviews] = useState<string[]>([])
+  const [items, setItems] = useState<MediaItem[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [progress, setProgress] = useState('')
 
   function handleFiles(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(e.target.files || [])
-    const valid = selected.filter((f) => f.type.startsWith('image/'))
+    const valid = selected.filter(f => f.type.startsWith('image/') || f.type.startsWith('video/'))
     if (valid.length !== selected.length) {
-      setError('Only image files are allowed.')
+      setError('Only image and video files are allowed.')
       return
     }
-    if (files.length + valid.length > 10) {
-      setError('Maximum 10 images per post.')
+    if (items.length + valid.length > 10) {
+      setError('Maximum 10 items per post.')
       return
     }
     setError('')
-    setFiles((prev) => [...prev, ...valid])
-    // Generate local preview URLs
-    const urls = valid.map((f) => URL.createObjectURL(f))
-    setPreviews((prev) => [...prev, ...urls])
+    const newItems: MediaItem[] = valid.map(f => ({
+      type: f.type.startsWith('video/') ? 'video' : 'image',
+      file: f,
+      localUrl: URL.createObjectURL(f),
+    }))
+    setItems(prev => [...prev, ...newItems])
+    e.target.value = ''
   }
 
-  function removeFile(index: number) {
-    URL.revokeObjectURL(previews[index])
-    setFiles((prev) => prev.filter((_, i) => i !== index))
-    setPreviews((prev) => prev.filter((_, i) => i !== index))
+  function removeItem(index: number) {
+    URL.revokeObjectURL(items[index].localUrl)
+    setItems(prev => prev.filter((_, i) => i !== index))
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (files.length === 0) {
-      setError('Please select at least one image.')
+    if (items.length === 0) {
+      setError('Please select at least one image or video.')
       return
     }
-
     if (accessType === 'ppv') {
       const price = parseFloat(ppvPrice)
-      if (isNaN(price) || price < 1) {
-        setError('PPV price must be at least $1.00')
-        return
-      }
+      if (isNaN(price) || price < 1) { setError('PPV price must be at least $1.00'); return }
     }
 
     setError('')
     setLoading(true)
-    setProgress('Uploading...')
 
     try {
+      const supabase = createClient()
+      const videoItems = items.filter(item => item.type === 'video')
+      const uploadedVideoPaths: string[] = []
+      const videoThumbs: (Blob | null)[] = []
+
+      if (videoItems.length > 0) {
+        setProgress(`Uploading ${videoItems.length} video${videoItems.length > 1 ? 's' : ''}…`)
+        for (let vi = 0; vi < videoItems.length; vi++) {
+          const item = videoItems[vi]
+          setProgress(`Uploading video ${vi + 1} of ${videoItems.length}…`)
+
+          const urlRes = await fetch('/api/posts/upload-url', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: item.file.name, contentType: item.file.type }),
+          })
+          if (!urlRes.ok) throw new Error('Failed to get upload URL')
+          const { path, token } = await urlRes.json()
+
+          const { error: uploadErr } = await supabase.storage
+            .from('originals')
+            .uploadToSignedUrl(path, token, item.file, { contentType: item.file.type })
+          if (uploadErr) throw new Error(`Failed to upload video: ${uploadErr.message}`)
+
+          uploadedVideoPaths.push(path)
+
+          setProgress(`Processing video ${vi + 1} thumbnail…`)
+          videoThumbs.push(await captureVideoThumbnail(item.file))
+        }
+      }
+
+      setProgress('Saving post…')
       const formData = new FormData()
       formData.append('caption', caption)
       formData.append('access_type', accessType)
       if (accessType === 'ppv') formData.append('price_usd', ppvPrice)
-      for (const file of files) formData.append('files', file)
+
+      const mediaOrder = items.map(item => item.type)
+      formData.append('mediaOrder', JSON.stringify(mediaOrder))
+
+      let videoOrderIdx = 0
+      for (const item of items) {
+        if (item.type === 'image') {
+          formData.append('files', item.file)
+        } else {
+          formData.append('videoPaths', uploadedVideoPaths[videoOrderIdx])
+          const thumb = videoThumbs[videoOrderIdx]
+          if (thumb) formData.append('videoThumbs', thumb, 'thumb.jpg')
+          videoOrderIdx++
+        }
+      }
 
       const res = await fetch('/api/posts/create', { method: 'POST', body: formData })
       const data = await res.json()
-
       if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`)
 
       router.push('/dashboard/posts')
@@ -92,39 +171,46 @@ export function NewPostForm({ creatorId }: { creatorId: string }) {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-6 max-w-xl">
-      {/* Image upload */}
+      {/* Media upload */}
       <div>
-        <p className="text-sm font-medium text-text-secondary mb-2">Images</p>
+        <p className="text-sm font-medium text-text-secondary mb-2">Media</p>
 
-        {/* Drop zone */}
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
           className="w-full border-2 border-dashed border-border rounded-2xl p-6 text-center hover:border-accent/40 transition-colors"
         >
           <p className="text-3xl mb-2">📷</p>
-          <p className="text-sm text-text-secondary">Click to select images</p>
-          <p className="text-xs text-text-muted mt-1">JPEG, PNG, WebP · Max 10 images</p>
+          <p className="text-sm text-text-secondary">Click to select images or videos</p>
+          <p className="text-xs text-text-muted mt-1">JPEG, PNG, WebP, MP4, MOV · Max 10 items</p>
         </button>
         <input
           ref={fileRef}
           type="file"
-          accept="image/*"
+          accept="image/*,video/*"
           multiple
           className="hidden"
           onChange={handleFiles}
         />
 
-        {/* Preview grid */}
-        {previews.length > 0 && (
+        {items.length > 0 && (
           <div className="grid grid-cols-4 gap-2 mt-3">
-            {previews.map((url, i) => (
+            {items.map((item, i) => (
               <div key={i} className="relative aspect-square rounded-xl overflow-hidden bg-bg-elevated group">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={url} alt="" className="h-full w-full object-cover" />
+                {item.type === 'image' ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={item.localUrl} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <>
+                    <video src={item.localUrl} className="h-full w-full object-cover" muted playsInline />
+                    <div className="absolute bottom-1 left-1 bg-black/60 rounded px-1">
+                      <span className="text-[9px] text-white">▶ video</span>
+                    </div>
+                  </>
+                )}
                 <button
                   type="button"
-                  onClick={() => removeFile(i)}
+                  onClick={() => removeItem(i)}
                   className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity text-white text-xs font-medium"
                 >
                   Remove
@@ -195,13 +281,7 @@ export function NewPostForm({ creatorId }: { creatorId: string }) {
       )}
 
       <div className="flex gap-3">
-        <Button
-          type="button"
-          variant="secondary"
-          size="lg"
-          onClick={() => router.back()}
-          disabled={loading}
-        >
+        <Button type="button" variant="secondary" size="lg" onClick={() => router.back()} disabled={loading}>
           Cancel
         </Button>
         <Button type="submit" size="lg" loading={loading} className="flex-1">

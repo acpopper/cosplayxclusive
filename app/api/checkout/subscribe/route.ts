@@ -34,7 +34,6 @@ export async function POST(request: NextRequest) {
       .from('profiles')
       .select('*')
       .eq('id', creatorId)
-      .eq('role', 'creator')
       .eq('creator_status', 'approved')
       .single()
 

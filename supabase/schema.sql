@@ -12,7 +12,7 @@ create table profiles (
   bio text,
   avatar_url text,
   banner_url text,
-  role text not null default 'fan' check (role in ('fan', 'creator', 'admin')),
+  role text not null default 'user' check (role in ('user', 'admin')),
   creator_status text check (creator_status in ('pending', 'approved', 'rejected')),
   subscription_price_usd numeric(10,2),
   fandom_tags text[] default '{}',
@@ -31,8 +31,10 @@ create table posts (
   price_usd numeric(10,2),
   -- media_paths: private storage paths for originals
   -- preview_paths: public storage paths for low-res previews (blurred in UI)
+  -- media_types: 'image' or 'video' per index, parallel to media_paths
   media_paths text[] default '{}',
   preview_paths text[] default '{}',
+  media_types text[] default '{}',
   published_at timestamptz default now(),
   created_at timestamptz default now()
 );
@@ -142,7 +144,7 @@ begin
   values (
     new.id,
     coalesce(new.raw_user_meta_data->>'username', 'user_' || substr(new.id::text, 1, 8)),
-    coalesce(new.raw_user_meta_data->>'role', 'fan')
+    'user'
   );
   return new;
 end;
@@ -189,3 +191,8 @@ create policy "previews_auth_upload" on storage.objects
 create policy "originals_no_public" on storage.objects
   for select using (bucket_id = 'originals' and auth.role() = 'authenticated');
 -- Note: actual signed URL generation is done server-side after access check
+
+-- =====================
+-- Migrations (run after initial setup)
+-- =====================
+-- alter table posts add column if not exists media_types text[] default '{}';

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import type { Post, Profile } from '@/lib/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { ReportPostDialog } from '@/components/report-post-dialog'
 
 interface PostCardProps {
   post: Post
@@ -29,7 +30,23 @@ export function PostCard({
   const [checkoutLoading, setCheckoutLoading] = useState(false)
   const [slideIndex, setSlideIndex] = useState(0)
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [reportOpen, setReportOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  const canReport = !!viewerId && viewerId !== creator.id
+
+  useEffect(() => {
+    if (!menuOpen) return
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [menuOpen])
 
   const displayUrls = hasAccess ? mediaUrls : previewUrls
   const isLocked = !hasAccess && post.access_type !== 'free'
@@ -98,7 +115,32 @@ export function PostCard({
 
   return (
     <>
-      <div className="bg-bg-card border border-border rounded-2xl overflow-hidden">
+      <div className="bg-bg-card border border-border rounded-2xl overflow-hidden relative">
+
+        {/* Overflow menu */}
+        {canReport && (
+          <div className="absolute top-2 right-2 z-10" ref={menuRef}>
+            <button
+              onClick={() => setMenuOpen((o) => !o)}
+              className="h-8 w-8 flex items-center justify-center rounded-full bg-black/40 hover:bg-black/60 text-white transition-colors backdrop-blur-sm"
+              aria-label="Post options"
+            >
+              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M10 3a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3z" />
+              </svg>
+            </button>
+            {menuOpen && (
+              <div className="absolute right-0 top-full mt-1 w-40 bg-bg-card border border-border rounded-xl shadow-2xl overflow-hidden">
+                <button
+                  onClick={() => { setMenuOpen(false); setReportOpen(true) }}
+                  className="w-full px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-elevated transition-colors"
+                >
+                  Report post
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Media */}
         {displayUrls.length > 0 ? (
@@ -109,21 +151,41 @@ export function PostCard({
               onScroll={handleScroll}
               className="flex overflow-x-auto snap-x snap-mandatory [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             >
-              {displayUrls.map((url, i) => (
-                <div key={i} className="snap-center shrink-0 w-full">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={url}
-                    alt={post.caption || 'Post image'}
-                    onClick={() => !isLocked && setLightboxIndex(i)}
-                    className={[
-                      'w-full max-h-[560px] object-cover select-none',
-                      !isLocked ? 'cursor-pointer' : '',
-                      isLocked ? 'blur-2xl scale-105' : '',
-                    ].join(' ')}
-                  />
-                </div>
-              ))}
+              {displayUrls.map((url, i) => {
+                const mediaType = (hasAccess ? (post.media_types ?? [])[i] : 'image') ?? 'image'
+                const isVideo = mediaType === 'video'
+                return (
+                  <div key={i} className="snap-center shrink-0 w-full relative">
+                    {isVideo && !isLocked ? (
+                      <>
+                        <video
+                          src={url}
+                          controls
+                          playsInline
+                          className="w-full max-h-[560px] object-cover"
+                        />
+                        <div className="absolute bottom-12 right-3 pointer-events-none">
+                          <div className="bg-black/55 text-white text-xs font-bold px-2 py-1 rounded-md">
+                            cosplayxclusive.com/@{creator.username}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={url}
+                        alt={post.caption || 'Post image'}
+                        onClick={() => !isLocked && !isVideo && setLightboxIndex(i)}
+                        className={[
+                          'w-full max-h-[560px] object-cover select-none',
+                          !isLocked && !isVideo ? 'cursor-pointer' : '',
+                          isLocked ? 'blur-2xl scale-105' : '',
+                        ].join(' ')}
+                      />
+                    )}
+                  </div>
+                )
+              })}
             </div>
 
             {/* Prev/Next arrows — visible on desktop when multiple slides */}
@@ -229,58 +291,79 @@ export function PostCard({
       </div>
 
       {/* Lightbox */}
-      {lightboxIndex !== null && (
-        <div
-          className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center"
-          onClick={() => setLightboxIndex(null)}
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={displayUrls[lightboxIndex]}
-            alt=""
-            className="max-h-screen max-w-full object-contain select-none"
-            onClick={e => e.stopPropagation()}
-            draggable={false}
-          />
-
-          {/* Close */}
-          <button
+      {lightboxIndex !== null && (() => {
+        const lbType = (hasAccess ? (post.media_types ?? [])[lightboxIndex] : 'image') ?? 'image'
+        const lbIsVideo = lbType === 'video'
+        return (
+          <div
+            className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center"
             onClick={() => setLightboxIndex(null)}
-            className="absolute top-4 right-4 h-9 w-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
-            aria-label="Close"
           >
-            ✕
-          </button>
-
-          {/* Prev */}
-          {lightboxIndex > 0 && (
-            <button
-              onClick={e => { e.stopPropagation(); setLightboxIndex(i => i !== null ? i - 1 : i) }}
-              className="absolute left-4 top-1/2 -translate-y-1/2 h-11 w-11 rounded-full bg-white/10 hover:bg-white/20 text-white text-3xl leading-none flex items-center justify-center transition-colors"
-              aria-label="Previous image"
-            >
-              ‹
-            </button>
-          )}
-
-          {/* Next */}
-          {lightboxIndex < displayUrls.length - 1 && (
-            <button
-              onClick={e => { e.stopPropagation(); setLightboxIndex(i => i !== null ? i + 1 : i) }}
-              className="absolute right-4 top-1/2 -translate-y-1/2 h-11 w-11 rounded-full bg-white/10 hover:bg-white/20 text-white text-3xl leading-none flex items-center justify-center transition-colors"
-              aria-label="Next image"
-            >
-              ›
-            </button>
-          )}
-
-          {/* Counter */}
-          {displayUrls.length > 1 && (
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-black/60 text-white text-sm px-3 py-1 rounded-full">
-              {lightboxIndex + 1} / {displayUrls.length}
+            <div className="relative" onClick={e => e.stopPropagation()}>
+              {lbIsVideo ? (
+                <video
+                  src={displayUrls[lightboxIndex]}
+                  controls
+                  autoPlay
+                  className="max-h-screen max-w-full object-contain select-none"
+                />
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={displayUrls[lightboxIndex]}
+                  alt=""
+                  className="max-h-screen max-w-full object-contain select-none"
+                  draggable={false}
+                />
+              )}
+              {lbIsVideo && (
+                <div className="absolute bottom-14 right-3 pointer-events-none">
+                  <div className="bg-black/55 text-white text-xs font-bold px-2 py-1 rounded-md">
+                    cosplayxclusive.com/@{creator.username}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </div>
+
+            <button
+              onClick={() => setLightboxIndex(null)}
+              className="absolute top-4 right-4 h-9 w-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+
+            {lightboxIndex > 0 && (
+              <button
+                onClick={e => { e.stopPropagation(); setLightboxIndex(i => i !== null ? i - 1 : i) }}
+                className="absolute left-4 top-1/2 -translate-y-1/2 h-11 w-11 rounded-full bg-white/10 hover:bg-white/20 text-white text-3xl leading-none flex items-center justify-center transition-colors"
+                aria-label="Previous"
+              >
+                ‹
+              </button>
+            )}
+
+            {lightboxIndex < displayUrls.length - 1 && (
+              <button
+                onClick={e => { e.stopPropagation(); setLightboxIndex(i => i !== null ? i + 1 : i) }}
+                className="absolute right-4 top-1/2 -translate-y-1/2 h-11 w-11 rounded-full bg-white/10 hover:bg-white/20 text-white text-3xl leading-none flex items-center justify-center transition-colors"
+                aria-label="Next"
+              >
+                ›
+              </button>
+            )}
+
+            {displayUrls.length > 1 && (
+              <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-black/60 text-white text-sm px-3 py-1 rounded-full">
+                {lightboxIndex + 1} / {displayUrls.length}
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
+      {reportOpen && (
+        <ReportPostDialog postId={post.id} onClose={() => setReportOpen(false)} />
       )}
     </>
   )

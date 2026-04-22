@@ -1,7 +1,9 @@
 import { notFound } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { hasPostAccess, isActiveSubscriber } from '@/lib/access'
 import { CreatorProfileClient } from './profile-client'
+import { RestrictedProfile } from './restricted-profile'
+import { Footer } from '@/components/footer'
 import type { Post, Subscription, PostPurchase, Profile } from '@/lib/types'
 
 export default async function CreatorProfilePage(props: PageProps<'/[username]'>) {
@@ -28,12 +30,44 @@ export default async function CreatorProfilePage(props: PageProps<'/[username]'>
     .from('profiles')
     .select('*')
     .eq('username', username.toLowerCase())
-    .eq('role', 'creator')
+    .not('creator_status', 'is', null)
     .single()
 
   // Admins can view any creator profile (including suspended); others see 404 for non-approved
   if (!creator || (!isAdmin && creator.creator_status !== 'approved')) {
     notFound()
+  }
+
+  // Block relationship — admins bypass blocks entirely
+  if (user && !isAdmin && user.id !== creator.id) {
+    const service = createServiceClient()
+    const { data: blockRows } = await service
+      .from('user_blocks')
+      .select('blocker_id, blocked_id')
+      .or(
+        `and(blocker_id.eq.${user.id},blocked_id.eq.${creator.id}),` +
+        `and(blocker_id.eq.${creator.id},blocked_id.eq.${user.id})`,
+      )
+
+    const viewerBlockedTarget = blockRows?.some(
+      (r) => r.blocker_id === user.id && r.blocked_id === creator.id,
+    )
+    const targetBlockedViewer = blockRows?.some(
+      (r) => r.blocker_id === creator.id && r.blocked_id === user.id,
+    )
+
+    // If the creator has blocked the viewer → pretend profile doesn't exist.
+    if (targetBlockedViewer) notFound()
+
+    // If the viewer has blocked the creator → restricted view only.
+    if (viewerBlockedTarget) {
+      return (
+        <>
+          <RestrictedProfile creator={creator as Profile} viewerProfile={viewerProfile} />
+          <Footer />
+        </>
+      )
+    }
   }
 
   // Get posts — owner and admin see all (including unpublished); everyone else only sees published
@@ -109,13 +143,16 @@ export default async function CreatorProfilePage(props: PageProps<'/[username]'>
   )
 
   return (
-    <CreatorProfileClient
-      creator={creator}
-      postsWithUrls={postsWithUrls}
-      viewerId={viewerId}
-      viewerProfile={viewerProfile}
-      isSubscribed={subscribed}
-      isAdmin={isAdmin}
-    />
+    <>
+      <CreatorProfileClient
+        creator={creator}
+        postsWithUrls={postsWithUrls}
+        viewerId={viewerId}
+        viewerProfile={viewerProfile}
+        isSubscribed={subscribed}
+        isAdmin={isAdmin}
+      />
+      <Footer />
+    </>
   )
 }

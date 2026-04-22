@@ -16,8 +16,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
     .eq('id', user.id)
     .single()
 
-  if (!profile || profile.role !== 'creator') {
-    redirect('/explore')
+  // Any user who has applied (pending/approved/rejected/suspended) gets dashboard access
+  if (!profile || !profile.creator_status) {
+    redirect('/settings')
   }
 
   return (

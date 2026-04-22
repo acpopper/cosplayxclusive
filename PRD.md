@@ -1,284 +1,213 @@
-You are my senior full-stack engineer. Build a FAST MVP for a niche creator platform called “CosplayXclusive”, inspired by OnlyFans/Arsmate but focused on cosplay creators only.
+# CosplayXclusive — Product Spec
 
-Your goal is NOT to build the full product spec. Your goal is to ship the smallest production-ready MVP that can validate whether cosplay creators and fans will use and pay for it.
+A platform built exclusively for cosplayers to share content, grow a
+subscriber base, and earn directly from their audience. This document is the
+living product spec — it reflects what's actually shipped rather than a
+forward-looking wish list. Update it when features change.
 
-IMPORTANT PRODUCT STRATEGY:
+## Product goals
 
-- This is a niche paid content platform for cosplay creators.
-- We are validating creator onboarding, paid subscriptions, PPV content, and basic paywall access.
-- We are NOT building a full social network.
-- We are optimizing for speed, simplicity, and a clean codebase that can be extended later.
-- If something is not critical for validating paid creator monetization, exclude it.
+- Give cosplayers a clean home for exclusive photo and video content.
+- Support three access tiers per post: free, subscriber-only, pay-per-view.
+- Let creators monetise via monthly subscriptions, PPV unlocks, and tips.
+- Keep the app feeling premium, mobile-first, and fast.
+- Provide admins enough tooling to vet creators and moderate chat/content.
 
-TECH STACK:
+## Tech stack
 
-- Next.js 14+ with App Router
-- TypeScript
-- Tailwind CSS
-- shadcn/ui
-- Supabase for Auth, Postgres, Storage
-- Stripe + Stripe Connect Express
-- Vercel-ready deployment
-- Minimal email support only if necessary
-- Clean, modular architecture
+| Layer    | Choice                                                    |
+| -------- | --------------------------------------------------------- |
+| Frontend | Next.js 16 (App Router), React 19, TypeScript             |
+| Styling  | Tailwind CSS v4, custom design tokens                     |
+| Auth/DB  | Supabase (Postgres + Auth + Storage + Realtime)           |
+| Payments | Stripe Checkout (subscriptions + PPV) + Stripe Connect    |
+| Media    | Supabase Storage (private `originals` + public `previews`), sharp-based server-side watermarking & blurring |
+| Hosting  | Vercel                                                    |
 
-DESIGN DIRECTION:
+## User roles
 
-- Mobile-first
-- Dark, modern, premium, anime/cosplay-inspired aesthetic
-- Not tacky, not porn-site-looking
-- More “premium creator platform” than “cheap adult site”
-- Use clean cards, soft gradients, subtle glow accents, strong CTAs
-- The UI should feel launchable, not like an admin prototype
+Roles are merged into a single `user` role (see
+`supabase/migration_merge_roles.sql`). Creator status is tracked separately
+on the profile via `creator_status`:
 
-BUILD ONLY THIS MVP SCOPE:
+- `null` — regular user (default for every signup).
+- `pending` — applied to become a creator, awaiting admin review.
+- `approved` — active creator; can publish paid content and receive payouts.
+- `rejected` — application was declined.
+- `suspended` — admin removed publishing rights.
 
-1. AUTHENTICATION
+`role` itself is `'user' | 'admin'`. Admins get access to the admin area.
 
-- Fan and Creator accounts
-- Email/password auth with Supabase
-- Google login optional if quick to add, otherwise skip for now
-- Protected app routes
-- Minimal onboarding:
-  - fan: username
-  - creator: username, display name, bio, fandom tags
-- Do NOT implement complex role flows beyond what is needed
+## Route map
 
-2. CREATOR PROFILES
+### Public
 
-- Public creator profile page at /@username
-- Show:
-  - avatar
-  - banner
-  - display name
-  - bio
-  - fandom tags
-  - subscription price
-  - grid of posts
-- If viewer is not subscribed, subscriber-only and PPV posts must show blurred preview + CTA
-- Keep profile editing simple
+- `/` — landing page
+- `/login`, `/signup`
+- `/terms`, `/privacy`
+- `/@:username` — creator profile (404 for non-approved creators and for
+  viewers who have been blocked by that creator)
 
-3. CONTENT POSTS
+### Authenticated
 
-- Creators can create posts with:
-  - optional caption
-  - one or more IMAGES only
-  - access type:
-    - free
-    - subscriber_only
-    - ppv
-  - optional PPV price if ppv
-- For MVP, support images only
-- Skip video entirely for now
-- Generate preview/blurred version for locked content
-- Store originals privately
-- Do not overengineer media processing
-- Implement a simple reliable image upload pipeline first
+- `/onboarding` — post-signup profile setup
+- `/home` — subscribed feed (only creators you follow/subscribe to)
+- `/explore` — discovery list of approved creators
+- `/messages`, `/messages/:conversationId`, `/messages/new` — 1:1 DMs with
+  realtime updates
+- `/settings` — account (editable username / email / password), creator
+  programme status, blocked accounts, legal links
+- `/settings/creator-apply` — apply to become a creator
 
-4. PAYWALL LOGIC
+### Creator dashboard (anyone with a `creator_status`)
 
-- Free posts visible to all
-- Subscriber-only posts visible only to active subscribers of that creator
-- PPV posts visible only to users who purchased that post
-- Backend must enforce access before returning original media URLs
-- Locked media should always render blurred previews in UI
+- `/dashboard` — overview / application status
+- `/dashboard/posts`, `/dashboard/posts/new`, `/dashboard/posts/:postId/edit`
+- `/dashboard/profile` — public profile editor (avatar, banner, bio, tags, price)
+- `/dashboard/messaging` — auto-message configuration for new subscribers
+- `/dashboard/connect` — Stripe Connect onboarding + payout status
 
-5. SUBSCRIPTIONS
+### Admin (`role = 'admin'`)
 
-- Each creator sets a monthly subscription price
-- Fans can subscribe through Stripe Checkout
-- Monthly recurring billing
-- Fans can cancel subscription
-- Access remains until current billing period ends
-- Sync subscription state via Stripe webhooks
+- `/admin` → redirects to `/admin/creators`
+- `/admin/creators` — creator applications list (pending / approved / suspended / rejected) with approve/reject/suspend actions
+- `/admin/moderation/words` — warning-word/regex patterns that auto-flag matching chat messages
+- `/admin/moderation/flagged` — conversations containing flagged messages
+- `/admin/moderation/flagged/:conversationId` — read-only chat viewer with flagged lines highlighted
+- `/admin/moderation/reports` — user-submitted post reports grouped by post
 
-6. PPV PURCHASES
+## Feature summary
 
-- Fans can unlock a single PPV post through Stripe Checkout
-- On successful payment, mark purchase in DB
-- Unlock content immediately after payment confirmation
-- Keep this simple and robust
+### Authentication & onboarding
+- Email + password via Supabase Auth. On signup the app checks username
+  uniqueness before calling `auth.signUp` so the profile trigger can't
+  collide.
+- `/onboarding` captures the first-run profile details.
+- All sensitive routes redirect to `/login` when unauthenticated.
 
-7. CREATOR DASHBOARD
+### Creator profiles
+- Avatar, banner, display name, username, bio, fandom tags, subscription price.
+- Public `/@username` page renders posts with locked previews for content
+  the viewer can't access, subscribe/PPV CTAs, a message button (admins
+  always; followers/subscribers otherwise), and a kebab menu with
+  **Block user** (logged-in non-admin viewers only).
+- Restricted profile view when the viewer has blocked the creator: only
+  avatar/banner/name + unblock CTA.
 
-- Creator can:
-  - edit profile
-  - create post
-  - list own posts
-  - see simple earnings summary
-  - connect Stripe account
-- No advanced analytics needed
+### Posts
+- Multi-media: images and videos on the same post.
+- Access types: `free`, `subscriber_only`, `ppv` (price per post).
+- Upload pipeline: signed upload URLs → server-side watermarking and
+  blurred preview generation via `sharp` → originals in private
+  `originals` bucket, previews in public `previews` bucket.
+- Backend gates access before handing out signed URLs; the client never
+  receives URLs for content it isn't entitled to.
+- Social: likes, comments, tips (Stripe).
+- Every post card has a kebab menu with **Report post** (modal with
+  categorised reasons: violence, nudity, underage, hate, spam, other).
 
-8. LIGHT ADMIN
+### Feed
+- `/home` is a personalised feed of the viewer's active subscriptions,
+  newest first. Excludes posts from anyone in a block relationship
+  (either direction).
 
-- Minimal admin route
-- Admin can:
-  - view creator accounts
-  - approve or reject creators manually
-- Nothing more
-- No heavy moderation tooling in MVP
+### Subscriptions & PPV
+- Stripe Checkout for monthly subscriptions (including $0 "free follow" tier).
+- Stripe Checkout for one-off PPV unlocks.
+- Stripe webhooks sync subscription status, period ends, and PPV purchase
+  records.
+- Creators onboard to Stripe Connect Express to receive payouts.
 
-9. LANDING PAGE
+### Messaging
+- 1:1 conversations with Supabase Realtime streaming new messages.
+- Participants normalized (`participant_a < participant_b`) to keep pairs
+  unique.
+- Image attachments supported via the public `previews` bucket (used by
+  auto-messages today).
+- Auto-messages: creators can configure a welcome DM that fires when a new
+  fan subscribes.
+- Read receipts per user via `conversation_reads`.
+- Admin badge rendered in chat for admin senders.
 
-- Public homepage for CosplayXclusive
-- Sections:
-  - hero
-  - value proposition
-  - for creators
-  - for fans
-  - CTA to join
-- Make it look polished enough for launch
+### Notifications
+- In-app bell shows recent activity for approved creators and admins:
+  new subscribers, likes / comments / tips on your posts, milestone
+  achievements, etc. Stored in `notifications` with a `group_key` for
+  stacking (see `migration_notifications_v2.sql`).
 
-EXPLICITLY EXCLUDE FROM THIS MVP:
+### Moderation (admin)
+- **Warning patterns** — admins add plain substrings or regex; a Postgres
+  `AFTER INSERT` trigger on `messages` scans each new message and records
+  matches in `flagged_messages`. A bad regex is caught in plpgsql and
+  ignored so it can never break chat sends.
+- **Flagged chats** — admins see conversations with matches, with a
+  read-only viewer that highlights the offending messages.
+- **Reports** — users report posts with a reason; admin sees grouped
+  reports with reporter, reason, details, and post preview.
+- **Block enforcement** — a `BEFORE INSERT` trigger on `messages` raises
+  when a block exists between sender and the other participant, catching
+  direct client inserts. `/api/messages/start` short-circuits the same
+  check before inserting.
 
-- Chat
-- Likes
-- Comments
-- Notifications
-- Feed algorithm
-- Explore filters beyond a very basic creator list
-- Video upload
-- Live streaming
-- Native mobile apps
-- Advanced moderation
-- Dynamic watermarking
-- Multi-language
-- Referral systems
-- Tips/donations
-- Bundles/discounted plans
-- Complex analytics
-- Anything not essential to monetized creator validation
+### Safety & blocking
+- Users block from the profile kebab menu. Blocks are directional in
+  the table but enforced symmetrically in the app:
+  - Viewer sees restricted view of blocked creator; blocked party sees
+    404 for the blocker.
+  - Feed excludes blocked creators either way.
+  - Neither party can DM the other (API + DB trigger).
+- **Settings → Blocked accounts** lists every user you've blocked with
+  inline unblock.
 
-DATABASE / DOMAIN MODEL:
-Use a clean minimal schema with tables equivalent to:
+## Database schema overview
 
-- profiles
-- creator_applications
-- posts
-- subscriptions
-- post_purchases
-- transactions
+Core tables (`supabase/schema.sql`):
+- `profiles` — user identity + creator fields + creator status
+- `posts` — media paths, access type, price, published flag
+- `subscriptions`, `post_purchases`, `transactions` — payments
 
-Suggested profile fields:
+Feature migrations (`supabase/migration_*.sql`):
+- `migration_merge_roles.sql` — collapses fan/creator into `user`, adds
+  `creator_application` / `creator_applied_at`
+- `migration_chat.sql` — `conversations`, `messages`, realtime
+- `migration_notifications.sql` + `_v2` — `notifications`, `conversation_reads`, stacking
+- `migration_feed.sql` — `post_likes`, `post_comments`, `post_tips`
+- `migration_messaging.sql` — `creator_automessages`
+- `migration_posts_publish.sql` — draft/publish flag on posts
+- `migration_moderation.sql` — `moderation_rules`, `flagged_messages`,
+  scan trigger on messages
+- `migration_reports_blocks.sql` — `post_reports`, `user_blocks`, block
+  guard trigger on messages
 
-- id
-- username
-- display_name
-- bio
-- avatar_url
-- banner_url
-- role (fan | creator | admin)
-- creator_status (pending | approved | rejected)
-- subscription_price_usd
-- fandom_tags
-- stripe_customer_id
-- stripe_account_id
+All migrations are idempotent — safe to re-run.
 
-Suggested post fields:
+## Security model
 
-- id
-- creator_id
-- caption
-- access_type (free | subscriber_only | ppv)
-- price_usd
-- published_at
+- RLS enabled on every user-writable table. Admin-only tables
+  (`moderation_rules`, `flagged_messages`, `post_reports` select) use an
+  `exists (…profiles.role = 'admin')` policy.
+- Server routes use the service role client only after verifying the
+  caller's session and privilege level.
+- Private media lives in the `originals` bucket and is only ever served
+  via short-lived signed URLs generated server-side after access checks.
+- Stripe webhook signatures are verified; no client-trusted price data.
+- Password changes require re-authentication with the current password.
+- Block/moderation triggers run `security definer` with `search_path = public`.
 
-Suggested post media structure:
+## Design direction
 
-- separate table if needed, or json structure if simpler
-- keep it pragmatic, do not overengineer
+- Mobile-first, dark theme, modern, premium feel.
+- Cards, soft gradients, subtle accent glow on CTAs.
+- Copy rule: describe the product on its own terms — no competitor
+  name-drops, no positioning as an "adult content" platform.
 
-SECURITY REQUIREMENTS:
+## Deployment notes
 
-- Use Supabase RLS where appropriate
-- Originals must not be public
-- Locked content must not be directly accessible
-- Stripe webhook signature must be verified
-- Never trust the client for access control
-- Keep secrets server-side
-
-IMPLEMENTATION PRIORITIES:
-Follow this exact order and keep the app functional after each step:
-
-PHASE 1
-
-- Bootstrap Next.js app
-- Setup Tailwind and shadcn
-- Setup Supabase client/server auth
-- Create DB schema and migrations
-- Implement auth and protected routes
-- Implement roles and basic onboarding
-
-PHASE 2
-
-- Implement creator profile pages
-- Implement profile editing
-- Implement image upload for avatars/banner/posts
-- Implement post creation and listing
-- Implement blurred previews for locked posts
-
-PHASE 3
-
-- Implement Stripe subscription checkout
-- Implement Stripe Connect onboarding for creators
-- Implement subscription status syncing with webhooks
-- Implement paywall access checks
-
-PHASE 4
-
-- Implement PPV checkout and unlock flow
-- Implement creator dashboard
-- Implement simple earnings summary
-- Implement minimal admin approval panel
-
-PHASE 5
-
-- Build polished public landing page
-- Improve UI consistency
-- Add loading states, empty states, and error handling
-- Final cleanup for Vercel deployment
-
-CODING RULES:
-
-- Use TypeScript strictly
-- Keep components modular and reusable
-- Favor simple architecture over abstraction-heavy patterns
-- Do not introduce unnecessary libraries
-- Do not build speculative features
-- Do not leave placeholder pseudo-code unless unavoidable
-- Build real working flows
-- If a feature is ambiguous, choose the simplest implementation that supports launch
-- Prefer server-side enforcement for permissions and paid access
-- Keep code production-minded but MVP-fast
-
-OUTPUT FORMAT I WANT FROM YOU:
-
-1. First, analyze the project and propose:
-   - final MVP scope
-   - DB schema
-   - route map
-   - implementation plan
-2. Then start implementing immediately
-3. Work iteratively in small safe steps
-4. After each major milestone, summarize:
-   - what was built
-   - what remains
-   - any blockers
-5. If you must make product decisions, default to speed and simplicity
-
-SUCCESS DEFINITION:
-The MVP is successful if:
-
-- creators can apply and be approved
-- creators can create locked image posts
-- fans can subscribe and unlock subscriber-only content
-- fans can buy PPV posts
-- creator profiles and landing page look polished enough to launch
-- the app can be deployed to Vercel with Supabase and Stripe configured
-
-Now begin by:
-
-- reviewing the requested MVP critically
-- shrinking anything unnecessary
-- proposing the final implementation plan
-- then scaffolding the app and schema
+- `.env.local.example` lists the required env vars (Supabase URL + anon
+  key + service role key, Stripe secret + publishable + webhook secret,
+  `NEXT_PUBLIC_APP_URL`).
+- Deploy to Vercel; Supabase Storage buckets `originals` (private) and
+  `previews` (public) must be created with the project.
+- Run migrations in numeric/feature order after `schema.sql`.
+- Stripe Connect Express must be enabled in the Stripe dashboard for
+  creator payouts.

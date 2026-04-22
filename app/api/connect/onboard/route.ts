@@ -17,8 +17,8 @@ export async function POST(request: NextRequest) {
       .eq('id', user.id)
       .single()
 
-    if (!profile || profile.role !== 'creator') {
-      return NextResponse.json({ error: 'Not a creator account' }, { status: 403 })
+    if (!profile || profile.creator_status !== 'approved') {
+      return NextResponse.json({ error: 'Not an approved creator account' }, { status: 403 })
     }
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'

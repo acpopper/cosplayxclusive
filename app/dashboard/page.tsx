@@ -101,14 +101,19 @@ export default async function DashboardPage() {
       {/* ── Status alerts ───────────────────────────────────────────────────── */}
       {isPending && (
         <div className="rounded-xl border border-warning/20 bg-warning/5 p-4">
-          <p className="text-sm font-medium text-warning">Account pending approval</p>
-          <p className="text-xs text-text-muted mt-1">Your creator account is under review.</p>
+          <p className="text-sm font-medium text-warning">⏳ Application under review</p>
+          <p className="text-xs text-text-muted mt-1">Our team is reviewing your application. We&apos;ll reach out via messages — usually within a few business days.</p>
         </div>
       )}
       {profile?.creator_status === 'rejected' && (
-        <div className="rounded-xl border border-error/20 bg-error/5 p-4">
-          <p className="text-sm font-medium text-error">Application not approved</p>
-          <p className="text-xs text-text-muted mt-1">Contact support if you believe this is a mistake.</p>
+        <div className="rounded-xl border border-error/20 bg-error/5 p-4 flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-error">Application not approved</p>
+            <p className="text-xs text-text-muted mt-1">Check your messages for feedback from our team, then reapply when ready.</p>
+          </div>
+          <Link href="/settings/creator-apply">
+            <Button size="sm" variant="secondary">Reapply</Button>
+          </Link>
         </div>
       )}
       {isApproved && !profile?.stripe_account_id && (

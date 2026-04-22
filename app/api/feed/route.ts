@@ -7,17 +7,6 @@ export async function GET(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // Only fans get the feed
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single()
-
-  if (!profile || profile.role !== 'fan') {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-  }
-
   const { searchParams } = new URL(request.url)
   const cursor = searchParams.get('cursor') ?? undefined
   const limit = Math.min(Number(searchParams.get('limit') ?? '20'), 50)

@@ -1,4 +1,4 @@
-export type Role = 'fan' | 'creator' | 'admin'
+export type Role = 'user' | 'admin'
 export type CreatorStatus = 'pending' | 'approved' | 'rejected' | 'suspended'
 export type AccessType = 'free' | 'subscriber_only' | 'ppv'
 export type SubscriptionStatus = 'active' | 'canceled' | 'past_due' | 'incomplete' | 'trialing'
@@ -17,6 +17,8 @@ export interface Profile {
   fandom_tags: string[]
   stripe_customer_id: string | null
   stripe_account_id: string | null
+  creator_application: string | null
+  creator_applied_at: string | null
   created_at: string
   updated_at: string
 }
@@ -29,6 +31,7 @@ export interface Post {
   price_usd: number | null
   media_paths: string[]
   preview_paths: string[]
+  media_types: string[]
   published_at: string
   created_at: string
   // joined
@@ -131,6 +134,7 @@ export interface FeedPost {
   }
   mediaUrls: string[]       // signed private URLs (or preview if locked)
   previewUrls: string[]     // always-available blurred previews
+  mediaTypes: string[]      // 'image' | 'video' per index
   hasAccess: boolean
   likeCount: number
   hasLiked: boolean

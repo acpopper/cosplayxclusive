@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import type { FeedPost, FeedComment } from '@/lib/types'
 import { Badge } from '@/components/ui/badge'
+import { ReportPostDialog } from '@/components/report-post-dialog'
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 function timeAgo(dateStr: string): string {
@@ -21,11 +22,15 @@ const TIP_PRESETS = [1, 5, 10, 25, 50]
 // ─── Lightbox ─────────────────────────────────────────────────────────────────
 function Lightbox({
   urls,
+  types,
   index,
+  creatorUsername,
   onClose,
 }: {
   urls: string[]
+  types: string[]
   index: number
+  creatorUsername: string
   onClose: () => void
 }) {
   const [i, setI] = useState(index)
@@ -45,19 +50,38 @@ function Lightbox({
     return () => window.removeEventListener('keydown', onKey)
   }, [urls.length, onClose])
 
+  const isVideo = (types[i] ?? 'image') === 'video'
+
   return (
     <div
       className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center"
       onClick={onClose}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={urls[i]}
-        alt=""
-        className="max-h-screen max-w-full object-contain select-none"
-        onClick={e => e.stopPropagation()}
-        draggable={false}
-      />
+      <div className="relative" onClick={e => e.stopPropagation()}>
+        {isVideo ? (
+          <video
+            src={urls[i]}
+            controls
+            autoPlay
+            className="max-h-screen max-w-full object-contain select-none"
+          />
+        ) : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={urls[i]}
+            alt=""
+            className="max-h-screen max-w-full object-contain select-none"
+            draggable={false}
+          />
+        )}
+        {isVideo && (
+          <div className="absolute bottom-14 right-3 pointer-events-none">
+            <div className="bg-black/55 text-white text-xs font-bold px-2 py-1 rounded-md">
+              cosplayxclusive.com/@{creatorUsername}
+            </div>
+          </div>
+        )}
+      </div>
       <button onClick={onClose} className="absolute top-4 right-4 h-9 w-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors" aria-label="Close">✕</button>
       {i > 0 && (
         <button onClick={e => { e.stopPropagation(); setI(p => p - 1) }} className="absolute left-4 top-1/2 -translate-y-1/2 h-11 w-11 rounded-full bg-white/10 hover:bg-white/20 text-white text-3xl leading-none flex items-center justify-center transition-colors" aria-label="Previous">‹</button>
@@ -284,6 +308,21 @@ export function FeedPostCard({ post, viewerId }: FeedPostCardProps) {
   const [totalTipped, setTotalTipped] = useState(post.totalTipped)
   const [showTip, setShowTip] = useState(false)
 
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [reportOpen, setReportOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [menuOpen])
+
   function handleScroll() {
     const el = scrollRef.current
     if (!el) return
@@ -354,6 +393,30 @@ export function FeedPostCard({ post, viewerId }: FeedPostCardProps) {
           {post.access_type === 'free' && <Badge variant="muted" className="text-xs">Free</Badge>}
           {post.access_type === 'subscriber_only' && post.hasAccess && <Badge variant="success" className="text-xs">Subscribed</Badge>}
           {post.access_type === 'ppv' && <Badge variant="warning" className="text-xs">{post.hasAccess ? 'Unlocked' : `$${post.price_usd?.toFixed(2)} PPV`}</Badge>}
+
+          {!isOwnPost && (
+            <div className="relative" ref={menuRef}>
+              <button
+                onClick={() => setMenuOpen((o) => !o)}
+                className="h-8 w-8 flex items-center justify-center rounded-full text-text-muted hover:text-text-primary hover:bg-bg-elevated transition-colors"
+                aria-label="Post options"
+              >
+                <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M10 3a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm0 5.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3z" />
+                </svg>
+              </button>
+              {menuOpen && (
+                <div className="absolute right-0 top-full mt-1 w-40 bg-bg-card border border-border rounded-xl shadow-2xl overflow-hidden z-20">
+                  <button
+                    onClick={() => { setMenuOpen(false); setReportOpen(true) }}
+                    className="w-full px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-elevated transition-colors"
+                  >
+                    Report post
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* ── Caption ────────────────────────────────────────────────────────── */}
@@ -363,14 +426,34 @@ export function FeedPostCard({ post, viewerId }: FeedPostCardProps) {
         {displayUrls.length > 0 ? (
           <div className="relative">
             <div ref={scrollRef} onScroll={handleScroll} className="flex overflow-x-auto snap-x snap-mandatory [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {displayUrls.map((url, i) => (
-                <div key={i} className="snap-center shrink-0 w-full">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={url} alt={post.caption || 'Post image'} onClick={() => !isLocked && setLightboxIndex(i)}
-                    className={['w-full max-h-[520px] object-cover select-none', !isLocked ? 'cursor-pointer' : '', isLocked ? 'blur-2xl scale-105' : ''].join(' ')}
-                  />
-                </div>
-              ))}
+              {displayUrls.map((url, i) => {
+                const mediaType = (post.hasAccess ? post.mediaTypes[i] : 'image') ?? 'image'
+                const isVideo = mediaType === 'video'
+                return (
+                  <div key={i} className="snap-center shrink-0 w-full relative">
+                    {isVideo && !isLocked ? (
+                      <>
+                        <video
+                          src={url}
+                          controls
+                          playsInline
+                          className="w-full max-h-[520px] object-cover"
+                        />
+                        <div className="absolute bottom-12 right-3 pointer-events-none">
+                          <div className="bg-black/55 text-white text-xs font-bold px-2 py-1 rounded-md">
+                            cosplayxclusive.com/@{post.creator.username}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={url} alt={post.caption || 'Post image'} onClick={() => !isLocked && !isVideo && setLightboxIndex(i)}
+                        className={['w-full max-h-[520px] object-cover select-none', !isLocked && !isVideo ? 'cursor-pointer' : '', isLocked ? 'blur-2xl scale-105' : ''].join(' ')}
+                      />
+                    )}
+                  </div>
+                )
+              })}
             </div>
 
             {!isLocked && displayUrls.length > 1 && slideIndex > 0 && (
@@ -451,7 +534,13 @@ export function FeedPostCard({ post, viewerId }: FeedPostCardProps) {
       </article>
 
       {lightboxIndex !== null && (
-        <Lightbox urls={displayUrls} index={lightboxIndex} onClose={() => setLightboxIndex(null)} />
+        <Lightbox
+          urls={displayUrls}
+          types={post.hasAccess ? post.mediaTypes : displayUrls.map(() => 'image')}
+          index={lightboxIndex}
+          creatorUsername={post.creator.username}
+          onClose={() => setLightboxIndex(null)}
+        />
       )}
 
       {showTip && (
@@ -462,6 +551,10 @@ export function FeedPostCard({ post, viewerId }: FeedPostCardProps) {
             setTotalTipped(n => n + amount)
           }}
         />
+      )}
+
+      {reportOpen && (
+        <ReportPostDialog postId={post.id} onClose={() => setReportOpen(false)} />
       )}
     </>
   )

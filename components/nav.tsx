@@ -30,16 +30,20 @@ export function Nav({ profile }: NavProps) {
   const [notifOpen, setNotifOpen] = useState(false)
   const notifRef = useRef<HTMLDivElement>(null)
 
+  // Creator = approved creator status. Admins also get creator-level nav.
+  const isApprovedCreator = profile?.creator_status === 'approved'
+  const isAdmin = profile?.role === 'admin'
+  const hasCreatorDashboard = profile?.creator_status != null // pending/approved/rejected all get dashboard
+  const showNotifBell = isApprovedCreator || isAdmin
+
   const fetchCounts = useCallback(async () => {
     if (!profile) return
     const supabase = createClient()
 
-    // Unread message count via DB function
     const { data: msgCount } = await supabase.rpc('count_unread_conversations')
     setUnreadMsgs(msgCount ?? 0)
 
-    // Unread notification count + recent list (creators only)
-    if (profile.role === 'creator' || profile.role === 'admin') {
+    if (showNotifBell) {
       const { data: notifData } = await supabase
         .from('notifications')
         .select('*')
@@ -51,7 +55,7 @@ export function Nav({ profile }: NavProps) {
       setNotifs(all)
       setUnreadNotifs(all.filter((n) => !n.read_at).length)
     }
-  }, [profile])
+  }, [profile, showNotifBell])
 
   useEffect(() => {
     fetchCounts()
@@ -59,7 +63,6 @@ export function Nav({ profile }: NavProps) {
     return () => clearInterval(interval)
   }, [fetchCounts])
 
-  // Close notification panel when clicking outside
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
@@ -89,14 +92,12 @@ export function Nav({ profile }: NavProps) {
     router.refresh()
   }
 
-  const isCreatorOrAdmin = profile?.role === 'creator' || profile?.role === 'admin'
-
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-bg-base/90 backdrop-blur-xl">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-        {/* Logo */}
+        {/* Logo — always goes to /home for logged-in users */}
         <Link
-          href={profile ? (profile.role === 'fan' ? '/home' : '/explore') : '/'}
+          href={profile ? '/home' : '/'}
           className="flex items-center gap-2 font-semibold text-text-primary"
         >
           <span className="text-accent text-xl">✦</span>
@@ -108,20 +109,18 @@ export function Nav({ profile }: NavProps) {
         <nav className="flex items-center gap-1">
           {profile ? (
             <>
-              {/* Home feed — fans only */}
-              {profile.role === 'fan' && (
-                <Link
-                  href="/home"
-                  className={[
-                    'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
-                    pathname.startsWith('/home')
-                      ? 'text-text-primary bg-bg-elevated'
-                      : 'text-text-secondary hover:text-text-primary hover:bg-bg-elevated',
-                  ].join(' ')}
-                >
-                  Home
-                </Link>
-              )}
+              {/* Home feed — all logged-in users */}
+              <Link
+                href="/home"
+                className={[
+                  'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+                  pathname.startsWith('/home')
+                    ? 'text-text-primary bg-bg-elevated'
+                    : 'text-text-secondary hover:text-text-primary hover:bg-bg-elevated',
+                ].join(' ')}
+              >
+                Home
+              </Link>
 
               <Link
                 href="/explore"
@@ -135,7 +134,7 @@ export function Nav({ profile }: NavProps) {
                 Explore
               </Link>
 
-              {/* Messages link with unread badge */}
+              {/* Messages */}
               <Link
                 href="/messages"
                 className={[
@@ -153,7 +152,8 @@ export function Nav({ profile }: NavProps) {
                 )}
               </Link>
 
-              {profile.role === 'creator' && (
+              {/* Dashboard — visible to anyone who has applied (pending/approved/rejected) */}
+              {hasCreatorDashboard && (
                 <Link
                   href="/dashboard"
                   className={[
@@ -167,7 +167,8 @@ export function Nav({ profile }: NavProps) {
                 </Link>
               )}
 
-              {profile.role === 'admin' && (
+              {/* Admin */}
+              {isAdmin && (
                 <Link
                   href="/admin"
                   className={[
@@ -181,8 +182,8 @@ export function Nav({ profile }: NavProps) {
                 </Link>
               )}
 
-              {/* Notification bell — creators and admins only */}
-              {isCreatorOrAdmin && (
+              {/* Notification bell — approved creators & admins */}
+              {showNotifBell && (
                 <div className="relative" ref={notifRef}>
                   <button
                     onClick={() => {
@@ -193,10 +194,7 @@ export function Nav({ profile }: NavProps) {
                     aria-label="Notifications"
                   >
                     <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={1.75}
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75}
                         d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
                       />
                     </svg>
@@ -207,7 +205,6 @@ export function Nav({ profile }: NavProps) {
                     )}
                   </button>
 
-                  {/* Notification dropdown */}
                   {notifOpen && (
                     <div className="absolute right-0 top-full mt-2 w-72 bg-bg-card border border-border rounded-xl shadow-2xl z-50 overflow-hidden">
                       <div className="px-4 py-2.5 border-b border-border">
@@ -224,8 +221,6 @@ export function Nav({ profile }: NavProps) {
                         <ul className="max-h-96 overflow-y-auto divide-y divide-border">
                           {notifs.map((n) => {
                             const p = n.payload
-
-                            // ── Resolve avatar + primary text ────────────────
                             let avatarUrl: string | null = null
                             let avatarInitial = '?'
                             let emoji: string | null = null
@@ -277,12 +272,8 @@ export function Nav({ profile }: NavProps) {
                             return (
                               <li
                                 key={n.id}
-                                className={[
-                                  'flex items-start gap-3 px-4 py-3 transition-colors',
-                                  !n.read_at ? 'bg-accent/5' : '',
-                                ].join(' ')}
+                                className={['flex items-start gap-3 px-4 py-3 transition-colors', !n.read_at ? 'bg-accent/5' : ''].join(' ')}
                               >
-                                {/* Avatar or emoji icon */}
                                 {emoji ? (
                                   <div className="h-8 w-8 rounded-full bg-bg-elevated flex items-center justify-center flex-shrink-0 mt-0.5 text-base">
                                     {emoji}
@@ -299,20 +290,12 @@ export function Nav({ profile }: NavProps) {
                                     )}
                                   </div>
                                 )}
-
-                                {/* Text */}
                                 <div className="flex-1 min-w-0">
                                   <p className="text-sm text-text-primary leading-snug">{mainText}</p>
-                                  {subText && (
-                                    <p className="text-xs text-text-muted mt-0.5 truncate italic">{subText}</p>
-                                  )}
+                                  {subText && <p className="text-xs text-text-muted mt-0.5 truncate italic">{subText}</p>}
                                   <p className="text-xs text-text-muted mt-0.5">{timeAgo(timestamp)}</p>
                                 </div>
-
-                                {/* Unread dot */}
-                                {!n.read_at && (
-                                  <span className="mt-1.5 h-2 w-2 rounded-full bg-accent flex-shrink-0" />
-                                )}
+                                {!n.read_at && <span className="mt-1.5 h-2 w-2 rounded-full bg-accent flex-shrink-0" />}
                               </li>
                             )
                           })}
@@ -323,11 +306,17 @@ export function Nav({ profile }: NavProps) {
                 </div>
               )}
 
-              {/* Profile avatar */}
-              <div className="ml-1 flex items-center gap-2">
+              {/* Avatar (→ Settings) + Sign out */}
+              <div className="ml-1 flex items-center gap-1">
                 <Link
-                  href={profile.role === 'creator' ? `/${profile.username}` : '/explore'}
-                  className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-bg-elevated border border-border hover:border-accent/40 transition-colors"
+                  href="/settings"
+                  className={[
+                    'flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-bg-elevated border transition-colors',
+                    pathname.startsWith('/settings')
+                      ? 'border-accent'
+                      : 'border-border hover:border-accent/40',
+                  ].join(' ')}
+                  title="Settings"
                 >
                   {profile.avatar_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -342,6 +331,7 @@ export function Nav({ profile }: NavProps) {
                     </span>
                   )}
                 </Link>
+
                 <button
                   onClick={handleSignOut}
                   className="text-xs text-text-muted hover:text-text-secondary transition-colors px-2 py-1 rounded-lg hover:bg-bg-elevated"

@@ -74,7 +74,7 @@ export function ProfileEditForm({ profile }: { profile: Profile }) {
         updated_at: new Date().toISOString(),
       }
 
-      if (profile.role === 'creator') {
+      if (profile.creator_status != null) {
         const p = parseFloat(price)
         if (isNaN(p) || p < 0) {
           setError('Price must be $0.00 or more')
@@ -180,7 +180,7 @@ export function ProfileEditForm({ profile }: { profile: Profile }) {
         maxLength={500}
       />
 
-      {profile.role === 'creator' && (
+      {profile.creator_status != null && (
         <Input
           label="Monthly Subscription Price (USD)"
           type="number"

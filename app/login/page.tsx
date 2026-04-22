@@ -94,6 +94,12 @@ export default function LoginPage() {
               Sign up
             </Link>
           </p>
+
+          <p className="mt-3 text-center text-xs text-text-muted leading-relaxed">
+            <Link href="/terms" className="hover:text-accent transition-colors">Terms</Link>
+            {' · '}
+            <Link href="/privacy" className="hover:text-accent transition-colors">Privacy</Link>
+          </p>
         </div>
       </div>
     </div>

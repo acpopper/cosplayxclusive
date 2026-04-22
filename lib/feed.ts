@@ -23,16 +23,35 @@ export async function getFeedPage(
   limit = 20,
   cursor?: string
 ): Promise<FeedPost[]> {
-  // 1. Get creator ids the fan is actively subscribed to
-  const { data: subs } = await supabase
-    .from('subscriptions')
-    .select('creator_id')
-    .eq('fan_id', fanId)
-    .eq('status', 'active')
+  // 1. Get creator ids the fan is actively subscribed to, minus blocked relationships
+  const [{ data: subs }, { data: blocksOut }, { data: blocksIn }] = await Promise.all([
+    supabase
+      .from('subscriptions')
+      .select('creator_id')
+      .eq('fan_id', fanId)
+      .eq('status', 'active'),
+    supabase
+      .from('user_blocks')
+      .select('blocked_id')
+      .eq('blocker_id', fanId),
+    supabase
+      .from('user_blocks')
+      .select('blocker_id')
+      .eq('blocked_id', fanId),
+  ])
 
   if (!subs || subs.length === 0) return []
 
-  const creatorIds = subs.map((s: { creator_id: string }) => s.creator_id)
+  const blockedSet = new Set<string>([
+    ...(blocksOut ?? []).map((b: { blocked_id: string }) => b.blocked_id),
+    ...(blocksIn  ?? []).map((b: { blocker_id: string }) => b.blocker_id),
+  ])
+
+  const creatorIds = subs
+    .map((s: { creator_id: string }) => s.creator_id)
+    .filter((id: string) => !blockedSet.has(id))
+
+  if (creatorIds.length === 0) return []
 
   // 2. Fetch posts with creator profile
   let query = supabase
@@ -45,6 +64,7 @@ export async function getFeedPage(
       price_usd,
       media_paths,
       preview_paths,
+      media_types,
       published_at,
       creator:profiles!creator_id (
         id,
@@ -130,6 +150,7 @@ export async function getFeedPage(
     price_usd: number | null
     media_paths: string[]
     preview_paths: string[]
+    media_types: string[] | null
     published_at: string
     // Supabase infers FK joins as arrays; runtime value is a single object or null
     creator: { id: string; username: string; display_name: string | null; avatar_url: string | null } | { id: string; username: string; display_name: string | null; avatar_url: string | null }[] | null
@@ -163,6 +184,10 @@ export async function getFeedPage(
       // Preview URLs are always public (genuinely blurred server-side on upload)
       const previewUrls: string[] = (post.preview_paths ?? []).map(publicPreviewUrl)
 
+      // Normalise media_types: fall back to all-image for legacy posts
+      const rawTypes = post.media_types ?? []
+      const mediaTypes = post.media_paths.map((_, i) => rawTypes[i] ?? 'image')
+
       return {
         id: post.id,
         creator_id: post.creator_id,
@@ -173,6 +198,7 @@ export async function getFeedPage(
         creator: creatorRaw ?? { id: post.creator_id, username: '', display_name: null, avatar_url: null },
         mediaUrls,
         previewUrls,
+        mediaTypes,
         hasAccess,
         likeCount: likeCountMap[post.id] ?? 0,
         hasLiked: likedSet.has(post.id),
