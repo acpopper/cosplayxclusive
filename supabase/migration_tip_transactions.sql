@@ -1,4 +1,4 @@
--- Allow 'tip' as a valid transaction type
+-- Allow 'tip' as a valid transaction type.
 alter table transactions
   drop constraint if exists transactions_type_check;
 
