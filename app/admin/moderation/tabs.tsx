@@ -4,22 +4,25 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
 const tabs = [
-  { href: '/admin/moderation/words',   label: 'Warning words', badgeKey: null },
-  { href: '/admin/moderation/flagged', label: 'Flagged chats', badgeKey: 'flagged' as const },
-  { href: '/admin/moderation/reports', label: 'Reports',       badgeKey: 'reports' as const },
+  { href: '/admin/moderation/words',       label: 'Warning words', badgeKey: null },
+  { href: '/admin/moderation/flagged',     label: 'Flagged chats', badgeKey: 'flagged'     as const },
+  { href: '/admin/moderation/reports',     label: 'Reports',       badgeKey: 'reports'     as const },
+  { href: '/admin/moderation/media-flags', label: 'Media flags',   badgeKey: 'mediaFlags'  as const },
 ]
 
 interface ModerationTabsProps {
-  flaggedCount?: number
-  reportsCount?: number
+  flaggedCount?:    number
+  reportsCount?:    number
+  mediaFlagsCount?: number
 }
 
-export function ModerationTabs({ flaggedCount, reportsCount }: ModerationTabsProps) {
+export function ModerationTabs({ flaggedCount, reportsCount, mediaFlagsCount }: ModerationTabsProps) {
   const pathname = usePathname()
 
-  function badge(key: 'flagged' | 'reports' | null): number | null {
-    if (key === 'flagged') return flaggedCount ?? null
-    if (key === 'reports') return reportsCount ?? null
+  function badge(key: 'flagged' | 'reports' | 'mediaFlags' | null): number | null {
+    if (key === 'flagged')     return flaggedCount    ?? null
+    if (key === 'reports')     return reportsCount    ?? null
+    if (key === 'mediaFlags')  return mediaFlagsCount ?? null
     return null
   }
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { upsertGroupedNotification, maybeSendMilestone } from '@/lib/notifications'
+import { sendNewComment } from '@/lib/email'
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient()
@@ -111,6 +112,25 @@ export async function POST(request: NextRequest) {
     postCaption: post.caption,
     count: totalComments ?? newCount,
   })
+
+  // Email on first comment notification (not every subsequent one)
+  if (newCount === 1) {
+    const { data: { user: creatorUser } } = await service.auth.admin.getUserById(post.creator_id)
+    if (creatorUser?.email) {
+      const { data: creatorProfile } = await service
+        .from('profiles')
+        .select('username')
+        .eq('id', post.creator_id)
+        .single()
+      await sendNewComment(
+        creatorUser.email,
+        creatorProfile?.username ?? '',
+        actor.display_name || actor.username,
+        post.caption,
+        body.trim(),
+      )
+    }
+  }
 
   return NextResponse.json({ comment })
 }

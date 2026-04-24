@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { checkImageContent } from '@/lib/sightengine'
 
 const BUCKET = 'previews'
 const MEDIA_PREFIX = 'chat-media'
@@ -51,17 +52,37 @@ export async function POST(request: NextRequest) {
   const allowedNew = MAX_IMAGES - keepPaths.length
   const filesToUpload = files.slice(0, allowedNew)
 
+  interface AutoMsgFlag {
+    storagePath: string
+    categories:  string[]
+    maxScore:    number
+    scores:      object
+  }
+  const pendingFlags: AutoMsgFlag[] = []
+
   for (let i = 0; i < filesToUpload.length; i++) {
     const file = filesToUpload[i]
     const ext = file.name.split('.').pop() ?? 'jpg'
     const path = `${MEDIA_PREFIX}/${user.id}/${type}/${Date.now()}_${i}.${ext}`
     const buffer = Buffer.from(await file.arrayBuffer())
 
-    const { error } = await service.storage
-      .from(BUCKET)
-      .upload(path, buffer, { contentType: file.type, upsert: false })
+    // Run SightEngine check in parallel with upload
+    const [, flagResult] = await Promise.allSettled([
+      service.storage
+        .from(BUCKET)
+        .upload(path, buffer, { contentType: file.type, upsert: false })
+        .then(({ error }) => { if (!error) newPaths.push(path) }),
+      checkImageContent(buffer, file.type),
+    ])
 
-    if (!error) newPaths.push(path)
+    if (flagResult.status === 'fulfilled' && flagResult.value.flagged) {
+      pendingFlags.push({
+        storagePath: path,
+        categories:  flagResult.value.categories,
+        maxScore:    flagResult.value.maxScore,
+        scores:      flagResult.value.scores,
+      })
+    }
   }
 
   const mediaPaths = [...keepPaths, ...newPaths]
@@ -81,6 +102,23 @@ export async function POST(request: NextRequest) {
     )
 
   if (upsertErr) return NextResponse.json({ error: upsertErr.message }, { status: 500 })
+
+  // Persist SightEngine flags as best-effort audit
+  if (pendingFlags.length > 0) {
+    await service.from('image_content_flags').insert(
+      pendingFlags.map((f) => ({
+        source_type:        'auto_message',
+        post_id:            null,
+        creator_id:         user.id,
+        storage_bucket:     BUCKET,
+        storage_path:       f.storagePath,
+        preview_path:       null,
+        flagged_categories: f.categories,
+        max_score:          f.maxScore,
+        detection_scores:   f.scores,
+      })),
+    )
+  }
 
   return NextResponse.json({ ok: true, mediaPaths })
 }

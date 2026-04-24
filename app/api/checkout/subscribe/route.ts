@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { getStripe } from '@/lib/stripe'
 import { maybeSendAutoMessage, isReturningSubscriber } from '@/lib/auto-message'
+import { sendNewSubscriber } from '@/lib/email'
 
 export async function POST(request: NextRequest) {
   try {
@@ -94,6 +95,17 @@ export async function POST(request: NextRequest) {
 
       // Send creator's auto-message (if configured)
       await maybeSendAutoMessage(service, user.id, creatorId, isReturn)
+
+      // Email creator about new free follower
+      const { data: { user: creatorUser } } = await service.auth.admin.getUserById(creatorId)
+      if (creatorUser?.email) {
+        await sendNewSubscriber(
+          creatorUser.email,
+          creator.username,
+          fanProfile.display_name || fanProfile.username,
+          false,
+        )
+      }
 
       return NextResponse.json({ url: successUrl })
     }

@@ -6,7 +6,8 @@
       "Bash(find C:UsersalanpDocumentsprojectscosplayxclusive -type f \\\\\\(-name *.sql -o -name schema* -o -name migration* \\\\\\))",
       "Bash(npx tsc:*)",
       "Bash(xargs grep *)",
-      "Bash(npx eslint *)"
+      "Bash(npx eslint *)",
+      "Bash(npm install *)"
     ]
   }
 }

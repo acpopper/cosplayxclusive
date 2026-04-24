@@ -2,10 +2,105 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import type { Post, Profile } from '@/lib/types'
+import type { Post, Profile, FeedComment } from '@/lib/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ReportPostDialog } from '@/components/report-post-dialog'
+
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h`
+  return `${Math.floor(hrs / 24)}d`
+}
+
+function CommentSection({ postId }: { postId: string }) {
+  const [comments, setComments] = useState<FeedComment[]>([])
+  const [body, setBody]         = useState('')
+  const [loading, setLoading]   = useState(false)
+  const [fetching, setFetching] = useState(true)
+
+  useEffect(() => {
+    fetch(`/api/posts/comment?postId=${postId}`)
+      .then((r) => r.ok ? r.json() : { comments: [] })
+      .then((d) => setComments(d.comments ?? []))
+      .finally(() => setFetching(false))
+  }, [postId])
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    const text = body.trim()
+    if (!text || loading) return
+    setLoading(true)
+    try {
+      const res  = await fetch('/api/posts/comment', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ postId, body: text }),
+      })
+      const data = await res.json()
+      if (res.ok && data.comment) {
+        setComments((prev) => [...prev, data.comment as FeedComment])
+        setBody('')
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="px-4 pb-4 border-t border-border pt-3">
+      {fetching && <p className="text-xs text-text-muted py-2 text-center">Loading…</p>}
+
+      {!fetching && comments.length > 0 && (
+        <ul className="flex flex-col gap-2.5 mb-3">
+          {comments.map((c) => {
+            const profile  = c.profile
+            const initials = (profile?.display_name || profile?.username || '?')[0].toUpperCase()
+            return (
+              <li key={c.id} className="flex items-start gap-2">
+                <div className="h-6 w-6 rounded-full overflow-hidden bg-bg-elevated flex-shrink-0 mt-0.5">
+                  {profile?.avatar_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={profile.avatar_url} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="h-full w-full flex items-center justify-center bg-gradient-to-br from-accent to-accent-alt">
+                      <span className="text-[9px] font-bold text-white">{initials}</span>
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline gap-1.5 flex-wrap">
+                    <span className="text-xs font-semibold text-text-primary">{profile?.display_name || profile?.username}</span>
+                    <span className="text-[10px] text-text-muted">{timeAgo(c.created_at)}</span>
+                  </div>
+                  <p className="text-sm text-text-secondary leading-snug break-words">{c.body}</p>
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+
+      <form onSubmit={handleSubmit} className="flex gap-2">
+        <input
+          type="text" value={body} onChange={(e) => setBody(e.target.value)}
+          placeholder="Add a comment…" maxLength={1000}
+          className="flex-1 rounded-xl border border-border bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors"
+        />
+        <button
+          type="submit" disabled={!body.trim() || loading}
+          className="px-3 py-2 rounded-xl bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Post
+        </button>
+      </form>
+    </div>
+  )
+}
 
 interface PostCardProps {
   post: Post
@@ -28,12 +123,47 @@ export function PostCard({
 }: PostCardProps) {
   const router = useRouter()
   const [checkoutLoading, setCheckoutLoading] = useState(false)
-  const [slideIndex, setSlideIndex] = useState(0)
-  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
-  const [menuOpen, setMenuOpen] = useState(false)
-  const [reportOpen, setReportOpen] = useState(false)
-  const menuRef = useRef<HTMLDivElement>(null)
+  const [slideIndex, setSlideIndex]           = useState(0)
+  const [lightboxIndex, setLightboxIndex]     = useState<number | null>(null)
+  const [menuOpen, setMenuOpen]               = useState(false)
+  const [reportOpen, setReportOpen]           = useState(false)
+  const [showComments, setShowComments]       = useState(false)
+
+  const [likeCount, setLikeCount]     = useState(0)
+  const [hasLiked, setHasLiked]       = useState(false)
+  const [likeLoading, setLikeLoading] = useState(false)
+
+  const menuRef   = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  // Lazy-fetch like state once on mount (only when logged in)
+  useEffect(() => {
+    if (!viewerId) return
+    fetch(`/api/posts/like?postId=${post.id}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d) { setLikeCount(d.likeCount); setHasLiked(d.hasLiked) } })
+      .catch(() => {/* ignore */})
+  }, [post.id, viewerId])
+
+  async function handleLike() {
+    if (!viewerId || likeLoading || viewerId === creator.id) return
+    const wasLiked = hasLiked
+    setHasLiked(!wasLiked)
+    setLikeCount((n) => wasLiked ? Math.max(0, n - 1) : n + 1)
+    setLikeLoading(true)
+    try {
+      await fetch('/api/posts/like', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ postId: post.id, action: wasLiked ? 'unlike' : 'like' }),
+      })
+    } catch {
+      setHasLiked(wasLiked)
+      setLikeCount((n) => wasLiked ? n + 1 : Math.max(0, n - 1))
+    } finally {
+      setLikeLoading(false)
+    }
+  }
 
   const canReport = !!viewerId && viewerId !== creator.id
 
@@ -278,16 +408,46 @@ export function PostCard({
           )}
           <div className="flex items-center justify-between">
             <span className="text-xs text-text-muted">{dateLabel}</span>
-            <div className="flex gap-1.5">
+            <div className="flex items-center gap-2">
               {post.access_type === 'free' && (
                 <Badge variant="muted" className="text-xs">Free</Badge>
               )}
               {hasAccess && post.access_type !== 'free' && (
                 <Badge variant="success" className="text-xs">Unlocked</Badge>
               )}
+              {viewerId && viewerId !== creator.id && (
+                <button
+                  onClick={handleLike}
+                  disabled={likeLoading}
+                  className={[
+                    'flex items-center gap-1 transition-colors',
+                    hasLiked ? 'text-accent' : 'text-text-muted hover:text-accent',
+                    likeLoading ? 'opacity-60 cursor-not-allowed' : '',
+                  ].join(' ')}
+                  aria-label={hasLiked ? 'Unlike' : 'Like'}
+                >
+                  <svg className="h-4 w-4" fill={hasLiked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={1.75} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12z" />
+                  </svg>
+                  {likeCount > 0 && <span className="text-xs">{likeCount}</span>}
+                </button>
+              )}
+              {viewerId && (
+                <button
+                  onClick={() => setShowComments((v) => !v)}
+                  className="flex items-center gap-1 text-text-muted hover:text-text-primary transition-colors"
+                  aria-label="Toggle comments"
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.75} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                </button>
+              )}
             </div>
           </div>
         </div>
+
+        {showComments && <CommentSection postId={post.id} />}
       </div>
 
       {/* Lightbox */}

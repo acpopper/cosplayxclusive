@@ -1,8 +1,10 @@
 import Link from 'next/link'
+import { AgeGate } from '@/components/age-gate'
 
 export default function LandingPage() {
   return (
     <div className="min-h-screen bg-bg-base text-text-primary overflow-x-hidden">
+      <AgeGate />
       {/* Nav */}
       <header className="fixed top-0 inset-x-0 z-50 border-b border-border/50 bg-bg-base/80 backdrop-blur-xl">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">

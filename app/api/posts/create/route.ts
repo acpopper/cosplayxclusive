@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import sharp from 'sharp'
+import { checkImageContent } from '@/lib/sightengine'
 
 async function makePreviewBuffer(buffer: Buffer): Promise<Buffer> {
   return sharp(buffer)
@@ -81,6 +82,15 @@ export async function POST(request: NextRequest) {
   const previewPaths: string[] = []
   const mediaTypes: string[] = []
 
+  interface PendingFlag {
+    storagePath:  string
+    previewPath:  string | null
+    categories:   string[]
+    maxScore:     number
+    scores:       object
+  }
+  const pendingFlags: PendingFlag[] = []
+
   const base = Date.now()
   let imageIdx = 0
   let videoIdx = 0
@@ -94,7 +104,12 @@ export async function POST(request: NextRequest) {
       const ext = file.name.split('.').pop()
       const path = `${user.id}/${base}_${i}.${ext}`
       const rawBuffer = Buffer.from(await file.arrayBuffer())
-      const buffer = await applyWatermark(rawBuffer, profile.username)
+
+      // Run SightEngine check on the original (pre-watermark) buffer in parallel with watermarking
+      const [flagResult, buffer] = await Promise.all([
+        checkImageContent(rawBuffer, file.type),
+        applyWatermark(rawBuffer, profile.username),
+      ])
 
       const { error: origErr } = await service.storage
         .from('originals')
@@ -106,14 +121,28 @@ export async function POST(request: NextRequest) {
       mediaPaths.push(path)
       mediaTypes.push('image')
 
+      let savedPreviewPath: string | null = null
       const previewPath = `${user.id}/${base}_${i}_preview.jpg`
       try {
         const previewBuffer = await makePreviewBuffer(buffer)
         const { error: prevErr } = await service.storage
           .from('previews')
           .upload(previewPath, previewBuffer, { contentType: 'image/jpeg', cacheControl: '3600', upsert: false })
-        if (!prevErr) previewPaths.push(previewPath)
+        if (!prevErr) {
+          previewPaths.push(previewPath)
+          savedPreviewPath = previewPath
+        }
       } catch { /* skip */ }
+
+      if (flagResult.flagged) {
+        pendingFlags.push({
+          storagePath: path,
+          previewPath: savedPreviewPath,
+          categories:  flagResult.categories,
+          maxScore:    flagResult.maxScore,
+          scores:      flagResult.scores,
+        })
+      }
 
     } else if (type === 'video') {
       const videoPath = videoPaths[videoIdx]
@@ -153,9 +182,30 @@ export async function POST(request: NextRequest) {
     postData.price_usd = parseFloat(priceRaw)
   }
 
-  const { error: insertErr } = await service.from('posts').insert(postData)
-  if (insertErr) {
-    return NextResponse.json({ error: insertErr.message }, { status: 500 })
+  const { data: insertedPost, error: insertErr } = await service
+    .from('posts')
+    .insert(postData)
+    .select('id')
+    .single()
+  if (insertErr || !insertedPost) {
+    return NextResponse.json({ error: insertErr?.message ?? 'Insert failed' }, { status: 500 })
+  }
+
+  // Persist any SightEngine flags as a best-effort audit (errors don't fail the request)
+  if (pendingFlags.length > 0) {
+    await service.from('image_content_flags').insert(
+      pendingFlags.map((f) => ({
+        source_type:        'post',
+        post_id:            insertedPost.id,
+        creator_id:         user.id,
+        storage_bucket:     'originals',
+        storage_path:       f.storagePath,
+        preview_path:       f.previewPath,
+        flagged_categories: f.categories,
+        max_score:          f.maxScore,
+        detection_scores:   f.scores,
+      })),
+    )
   }
 
   return NextResponse.json({ ok: true })

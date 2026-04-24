@@ -121,19 +121,18 @@ function TipModal({
 
   async function handleSend() {
     if (!finalAmount || finalAmount <= 0) { setError('Enter a valid amount'); return }
+    if (finalAmount < 1 || finalAmount > 500) { setError('Tip must be between $1 and $500'); return }
     setError(null)
     setLoading(true)
     try {
-      const res = await fetch('/api/posts/tip', {
+      const res = await fetch('/api/checkout/tip', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ postId: post.id, amount: finalAmount }),
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Something went wrong'); return }
-      setSuccess(true)
-      onTipped(finalAmount)
-      setTimeout(onClose, 1500)
+      if (data.url) window.location.href = data.url
     } finally {
       setLoading(false)
     }
@@ -181,7 +180,7 @@ function TipModal({
                   onClick={handleSend} disabled={loading}
                   className="w-full py-2.5 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent-hover transition-colors disabled:opacity-50 shadow-[0_0_20px_rgba(224,64,122,0.3)]"
                 >
-                  {loading ? 'Sending…' : `Send $${finalAmount || '—'} tip`}
+                  {loading ? 'Redirecting…' : `Send $${finalAmount || '—'} tip`}
                 </button>
                 <button onClick={onClose} disabled={loading} className="w-full py-2.5 rounded-xl text-sm text-text-muted hover:text-text-secondary transition-colors">Cancel</button>
               </div>

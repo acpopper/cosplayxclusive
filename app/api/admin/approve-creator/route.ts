@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { sendCreatorApproved, sendCreatorRejected } from '@/lib/email'
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
@@ -35,6 +36,23 @@ export async function POST(request: NextRequest) {
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+
+  // Send email notification to creator (best-effort)
+  const { data: { user: creatorUser } } = await serviceClient.auth.admin.getUserById(creatorId)
+  if (creatorUser?.email) {
+    const { data: creatorProfile } = await serviceClient
+      .from('profiles')
+      .select('username')
+      .eq('id', creatorId)
+      .single()
+
+    const username = creatorProfile?.username ?? creatorUser.email
+    if (action === 'approve') {
+      await sendCreatorApproved(creatorUser.email, username)
+    } else {
+      await sendCreatorRejected(creatorUser.email, username)
+    }
   }
 
   return NextResponse.json({ ok: true })

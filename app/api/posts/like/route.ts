@@ -2,6 +2,24 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { upsertGroupedNotification, maybeSendMilestone } from '@/lib/notifications'
 
+export async function GET(request: NextRequest) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const postId = new URL(request.url).searchParams.get('postId')
+  if (!postId) return NextResponse.json({ error: 'Missing postId' }, { status: 400 })
+
+  const service = createServiceClient()
+
+  const [countRes, myLikeRes] = await Promise.all([
+    service.from('post_likes').select('*', { count: 'exact', head: true }).eq('post_id', postId),
+    service.from('post_likes').select('post_id').eq('post_id', postId).eq('user_id', user.id).maybeSingle(),
+  ])
+
+  return NextResponse.json({ likeCount: countRes.count ?? 0, hasLiked: !!myLikeRes.data })
+}
+
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
