@@ -27,7 +27,7 @@ export default async function HomePage() {
     <div className="min-h-screen bg-bg-base flex flex-col">
       <Nav profile={profile as Profile} />
 
-      <main className="mx-auto max-w-xl w-full px-4 py-8 flex-1">
+      <main className="mx-auto max-w-xl w-full px-5 py-6 md:px-4 md:py-8 flex-1">
         <div className="mb-6">
           <h1 className="text-xl font-bold text-text-primary">Your Feed</h1>
           <p className="text-sm text-text-muted mt-0.5">Latest posts from creators you follow</p>

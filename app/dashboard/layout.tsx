@@ -27,7 +27,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <div className="min-h-screen bg-bg-base">
       <Nav profile={profile as Profile} />
-      <div className="mx-auto max-w-6xl px-4 py-8">
+      <div className="mx-auto max-w-6xl px-5 py-6 md:px-4 md:py-8">
         {!emailVerified && <EmailVerificationBanner />}
         <div className="flex flex-col md:flex-row gap-6">
           <DashboardSidebar profile={profile as Profile} />

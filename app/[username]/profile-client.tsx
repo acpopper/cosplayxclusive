@@ -362,7 +362,7 @@ export function CreatorProfileClient({
           <div className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-bg-base to-transparent" />
         </div>
 
-        <div className="relative z-10 mx-auto max-w-3xl px-4 pb-16">
+        <div className="relative z-10 mx-auto max-w-3xl px-5 pb-12 md:px-4 md:pb-16">
           {/* Profile header */}
           <div className="-mt-12 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6">
             <div className="flex items-end gap-4">

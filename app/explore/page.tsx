@@ -28,7 +28,7 @@ export default async function ExplorePage() {
     <div className="min-h-screen bg-bg-base flex flex-col">
       <Nav profile={viewerProfile} />
 
-      <main className="mx-auto max-w-6xl w-full px-4 py-10 flex-1">
+      <main className="mx-auto max-w-6xl w-full px-5 py-6 md:px-4 md:py-10 flex-1">
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-text-primary">Discover Creators</h1>
           <p className="mt-1 text-text-secondary text-sm">

@@ -23,7 +23,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   return (
     <div className="min-h-screen bg-bg-base">
       <Nav profile={profile as Profile} />
-      <div className="mx-auto max-w-6xl px-4 py-8">
+      <div className="mx-auto max-w-6xl px-5 py-6 md:px-4 md:py-8">
         <div className="flex flex-col md:flex-row gap-6">
           <AdminSidebar profile={profile as Profile} moderationCount={counts.total} />
           <main className="flex-1 min-w-0">{children}</main>
