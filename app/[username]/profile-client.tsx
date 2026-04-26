@@ -8,6 +8,7 @@ import { PostCard } from '@/components/post-card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Nav } from '@/components/nav'
+import posthog from 'posthog-js'
 
 interface PostWithUrls {
   post: Post
@@ -260,6 +261,11 @@ export function CreatorProfileClient({
   async function handleSubscribeFree() {
     setSubscribeLoading(true)
     setSubscribeError(null)
+    posthog.capture('subscription_initiated', {
+      creator_id: creator.id,
+      creator_username: creator.username,
+      subscription_type: 'free',
+    })
     try {
       const res = await fetch('/api/checkout/subscribe', {
         method: 'POST',
@@ -283,6 +289,12 @@ export function CreatorProfileClient({
     // Called from inside payment modal
     setSubscribeLoading(true)
     setSubscribeError(null)
+    posthog.capture('subscription_initiated', {
+      creator_id: creator.id,
+      creator_username: creator.username,
+      subscription_type: 'paid',
+      subscription_price_usd: creator.subscription_price_usd,
+    })
     try {
       const res = await fetch('/api/checkout/subscribe', {
         method: 'POST',
@@ -497,6 +509,7 @@ export function CreatorProfileClient({
                   hasAccess={hasAccess}
                   isSubscribed={localSubscribed}
                   viewerId={viewerId}
+                  viewerIsAdmin={isAdmin}
                   mediaUrls={mediaUrls}
                   previewUrls={previewUrls}
                 />

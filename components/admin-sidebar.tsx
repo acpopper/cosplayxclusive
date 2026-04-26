@@ -6,15 +6,16 @@ import type { Profile } from '@/lib/types'
 import { Badge } from '@/components/ui/badge'
 
 interface SidebarProps {
-  profile: Profile
+  profile:         Profile
+  moderationCount?: number
 }
 
 const navItems = [
-  { href: '/admin/creators',   label: 'Creator list', icon: '◈' },
-  { href: '/admin/moderation', label: 'Moderation',   icon: '◉' },
+  { href: '/admin/creators',   label: 'Creators',     icon: '◈', countKey: null },
+  { href: '/admin/moderation', label: 'Moderation',   icon: '◉', countKey: 'moderation' as const },
 ]
 
-export function AdminSidebar({ profile }: SidebarProps) {
+export function AdminSidebar({ profile, moderationCount = 0 }: SidebarProps) {
   const pathname = usePathname()
 
   return (
@@ -45,8 +46,9 @@ export function AdminSidebar({ profile }: SidebarProps) {
         </div>
 
         <nav className="flex flex-col gap-0.5">
-          {navItems.map(({ href, label, icon }) => {
+          {navItems.map(({ href, label, icon, countKey }) => {
             const active = pathname === href || pathname.startsWith(href + '/')
+            const count = countKey === 'moderation' ? moderationCount : 0
             return (
               <Link
                 key={href}
@@ -59,7 +61,12 @@ export function AdminSidebar({ profile }: SidebarProps) {
                 ].join(' ')}
               >
                 <span className="text-base">{icon}</span>
-                {label}
+                <span className="flex-1">{label}</span>
+                {count > 0 && (
+                  <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-error/15 text-error text-[11px] font-semibold">
+                    {count > 99 ? '99+' : count}
+                  </span>
+                )}
               </Link>
             )
           })}

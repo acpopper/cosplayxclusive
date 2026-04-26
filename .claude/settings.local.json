@@ -7,7 +7,14 @@
       "Bash(npx tsc:*)",
       "Bash(xargs grep *)",
       "Bash(npx eslint *)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "WebFetch(domain:sightengine.com)",
+      "WebSearch",
+      "WebFetch(domain:supabase.com)",
+      "mcp__supabase__list_migrations",
+      "mcp__supabase__execute_sql",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(grep -E \"\\\\.sql$\")"
     ]
   }
 }

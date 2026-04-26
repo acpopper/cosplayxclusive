@@ -6,7 +6,31 @@ import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { setFlash } from '@/lib/flash'
 import type { AccessType } from '@/lib/types'
+
+const FLAG_CATEGORY_LABELS: Record<string, string> = {
+  'nudity:sexual_activity':       'sexual activity',
+  'nudity:sexual_display':        'explicit nudity',
+  'nudity:erotica':               'erotica',
+  'nudity:very_suggestive':       'very suggestive',
+  'suggestive:visibly_undressed': 'visible nudity',
+  'suggestive:sextoy':            'sex toys',
+}
+
+interface PrecheckResult {
+  index:      number
+  flagged:    boolean
+  categories: string[]
+  maxScore:   number
+  scores:     unknown
+}
+
+interface PrecheckHit {
+  index:      number
+  categories: string[]
+  maxScore:   number
+}
 
 const ACCESS_OPTIONS: { value: AccessType; label: string; desc: string }[] = [
   { value: 'free', label: 'Free', desc: 'Visible to everyone' },
@@ -62,6 +86,8 @@ export function NewPostForm({ creatorId }: { creatorId: string }) {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [progress, setProgress] = useState('')
+  const [warning, setWarning] = useState<{ hits: PrecheckHit[] } | null>(null)
+  const precheckRef = useRef<PrecheckResult[] | null>(null)
 
   function handleFiles(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(e.target.files || [])
@@ -89,17 +115,7 @@ export function NewPostForm({ creatorId }: { creatorId: string }) {
     setItems(prev => prev.filter((_, i) => i !== index))
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (items.length === 0) {
-      setError('Please select at least one image or video.')
-      return
-    }
-    if (accessType === 'ppv') {
-      const price = parseFloat(ppvPrice)
-      if (isNaN(price) || price < 1) { setError('PPV price must be at least $1.00'); return }
-    }
-
+  async function performUpload() {
     setError('')
     setLoading(true)
 
@@ -156,10 +172,16 @@ export function NewPostForm({ creatorId }: { creatorId: string }) {
         }
       }
 
+      // Forward precheck scores so the server skips a second Sightengine call.
+      if (precheckRef.current) {
+        formData.append('precheckResults', JSON.stringify(precheckRef.current))
+      }
+
       const res = await fetch('/api/posts/create', { method: 'POST', body: formData })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`)
 
+      setFlash('Post published')
       router.push('/dashboard/posts')
       router.refresh()
     } catch (err) {
@@ -167,6 +189,62 @@ export function NewPostForm({ creatorId }: { creatorId: string }) {
       setLoading(false)
       setProgress('')
     }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (items.length === 0) {
+      setError('Please select at least one image or video.')
+      return
+    }
+    if (accessType === 'ppv') {
+      const price = parseFloat(ppvPrice)
+      if (isNaN(price) || price < 1) { setError('PPV price must be at least $1.00'); return }
+    }
+
+    setError('')
+    precheckRef.current = null
+
+    // Pre-check images for explicit content before doing any uploads.
+    const imageItems = items.filter(i => i.type === 'image')
+    if (imageItems.length > 0) {
+      setLoading(true)
+      setProgress('Checking content…')
+      try {
+        const fd = new FormData()
+        for (const it of imageItems) fd.append('files', it.file)
+        const res = await fetch('/api/posts/precheck', { method: 'POST', body: fd })
+        if (res.ok) {
+          const { results } = await res.json() as { results: PrecheckResult[] }
+          precheckRef.current = results
+          const hits = results.filter(r => r.flagged).map(r => ({
+            index:      r.index,
+            categories: r.categories,
+            maxScore:   r.maxScore,
+          }))
+          if (hits.length > 0) {
+            setLoading(false)
+            setProgress('')
+            setWarning({ hits })
+            return
+          }
+        }
+        // If precheck fails, fall through and let the server handle it during /create.
+      } catch {
+        // Network error on precheck → don't block, server will still flag for review.
+      }
+    }
+
+    await performUpload()
+  }
+
+  async function confirmUploadAnyway() {
+    setWarning(null)
+    await performUpload()
+  }
+
+  function cancelWarning() {
+    setWarning(null)
   }
 
   return (
@@ -288,6 +366,60 @@ export function NewPostForm({ creatorId }: { creatorId: string }) {
           Publish Post
         </Button>
       </div>
+
+      {warning && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/60 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          onClick={cancelWarning}
+        >
+          <div
+            className="w-full max-w-md bg-bg-card border border-border rounded-2xl p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-2xl mb-2">⚠️</p>
+            <h2 className="text-lg font-semibold text-text-primary mb-2">
+              Some content may violate our terms
+            </h2>
+            <p className="text-sm text-text-secondary mb-3">
+              Our automated review flagged{' '}
+              {warning.hits.length === 1
+                ? '1 image'
+                : `${warning.hits.length} images`}{' '}
+              for explicit content. Posts that violate our terms may be removed and your account may be restricted.
+            </p>
+
+            <ul className="text-xs text-text-muted space-y-1 mb-5 max-h-32 overflow-y-auto">
+              {warning.hits.map((hit) => {
+                const top = hit.categories
+                  .map((c) => FLAG_CATEGORY_LABELS[c] ?? c)
+                  .slice(0, 3)
+                  .join(', ')
+                return (
+                  <li key={hit.index}>
+                    <span className="text-text-secondary">Image {hit.index + 1}:</span>{' '}
+                    {top || 'flagged content'}
+                    {' · '}
+                    <span className="text-text-muted">
+                      {Math.round(hit.maxScore * 100)}% confidence
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+
+            <div className="flex gap-2 justify-end">
+              <Button type="button" variant="secondary" size="md" onClick={cancelWarning}>
+                Cancel
+              </Button>
+              <Button type="button" variant="danger" size="md" onClick={confirmUploadAnyway}>
+                Upload anyway
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </form>
   )
 }

@@ -6,6 +6,8 @@ import type { Post, Profile, FeedComment } from '@/lib/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ReportPostDialog } from '@/components/report-post-dialog'
+import { PaymentModal } from '@/components/payment-modal'
+import { PostModerationModal } from '@/components/post-moderation-modal'
 
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime()
@@ -108,6 +110,7 @@ interface PostCardProps {
   hasAccess: boolean
   isSubscribed: boolean
   viewerId: string | null
+  viewerIsAdmin?: boolean
   previewUrls?: string[]
   mediaUrls?: string[]
 }
@@ -118,15 +121,18 @@ export function PostCard({
   hasAccess,
   isSubscribed,
   viewerId,
+  viewerIsAdmin = false,
   previewUrls = [],
   mediaUrls = [],
 }: PostCardProps) {
   const router = useRouter()
   const [checkoutLoading, setCheckoutLoading] = useState(false)
+  const [ppvSecret, setPpvSecret]             = useState<string | null>(null)
   const [slideIndex, setSlideIndex]           = useState(0)
   const [lightboxIndex, setLightboxIndex]     = useState<number | null>(null)
   const [menuOpen, setMenuOpen]               = useState(false)
   const [reportOpen, setReportOpen]           = useState(false)
+  const [moderationOpen, setModerationOpen]   = useState(false)
   const [showComments, setShowComments]       = useState(false)
 
   const [likeCount, setLikeCount]     = useState(0)
@@ -166,6 +172,7 @@ export function PostCard({
   }
 
   const canReport = !!viewerId && viewerId !== creator.id
+  const showMenu  = canReport || viewerIsAdmin
 
   useEffect(() => {
     if (!menuOpen) return
@@ -199,13 +206,13 @@ export function PostCard({
     if (!viewerId) { router.push('/login'); return }
     setCheckoutLoading(true)
     try {
-      const res = await fetch('/api/checkout/ppv', {
+      const res  = await fetch('/api/checkout/ppv', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ postId: post.id }),
       })
       const data = await res.json()
-      if (data.url) window.location.href = data.url
+      if (data.clientSecret) setPpvSecret(data.clientSecret)
     } finally { setCheckoutLoading(false) }
   }
 
@@ -248,7 +255,7 @@ export function PostCard({
       <div className="bg-bg-card border border-border rounded-2xl overflow-hidden relative">
 
         {/* Overflow menu */}
-        {canReport && (
+        {showMenu && (
           <div className="absolute top-2 right-2 z-10" ref={menuRef}>
             <button
               onClick={() => setMenuOpen((o) => !o)}
@@ -260,13 +267,23 @@ export function PostCard({
               </svg>
             </button>
             {menuOpen && (
-              <div className="absolute right-0 top-full mt-1 w-40 bg-bg-card border border-border rounded-xl shadow-2xl overflow-hidden">
-                <button
-                  onClick={() => { setMenuOpen(false); setReportOpen(true) }}
-                  className="w-full px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-elevated transition-colors"
-                >
-                  Report post
-                </button>
+              <div className="absolute right-0 top-full mt-1 w-44 bg-bg-card border border-border rounded-xl shadow-2xl overflow-hidden">
+                {canReport && (
+                  <button
+                    onClick={() => { setMenuOpen(false); setReportOpen(true) }}
+                    className="w-full px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-elevated transition-colors"
+                  >
+                    Report post
+                  </button>
+                )}
+                {viewerIsAdmin && (
+                  <button
+                    onClick={() => { setMenuOpen(false); setModerationOpen(true) }}
+                    className="w-full px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-elevated transition-colors border-t border-border"
+                  >
+                    Moderation stats
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -522,8 +539,23 @@ export function PostCard({
         )
       })()}
 
+      {ppvSecret && (
+        <PaymentModal
+          clientSecret={ppvSecret}
+          title="Unlock this post"
+          subtitle={`Pay $${post.price_usd?.toFixed(2)} to access this exclusive content.`}
+          label={`Pay $${post.price_usd?.toFixed(2)}`}
+          onSuccess={() => { setPpvSecret(null); router.refresh() }}
+          onClose={() => setPpvSecret(null)}
+        />
+      )}
+
       {reportOpen && (
         <ReportPostDialog postId={post.id} onClose={() => setReportOpen(false)} />
+      )}
+
+      {moderationOpen && (
+        <PostModerationModal postId={post.id} onClose={() => setModerationOpen(false)} />
       )}
     </>
   )

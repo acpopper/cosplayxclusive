@@ -3,6 +3,8 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { ModerationTabs } from '../tabs'
 import { Badge } from '@/components/ui/badge'
 import { FlagActions } from './flag-actions'
+import { getModerationCounts } from '@/lib/moderation-counts'
+import type { DetectionScores } from '@/lib/sightengine'
 
 interface FlagRow {
   id:                 string
@@ -14,7 +16,7 @@ interface FlagRow {
   preview_path:       string | null
   flagged_categories: string[]
   max_score:          number
-  detection_scores:   { nudity?: Record<string, number> }
+  detection_scores:   DetectionScores
   resolved_at:        string | null
   created_at:         string
 }
@@ -37,21 +39,107 @@ interface MediaFlagsPageProps {
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
-  'nudity:sexual_activity': 'Sexual activity',
-  'nudity:sexual_display':  'Sexual display',
-  'nudity:erotica':         'Erotica',
-  'nudity:very_suggestive': 'Very suggestive',
+  // Intensity classes (model 2.1)
+  'nudity:sexual_activity':       'Sexual activity',
+  'nudity:sexual_display':        'Sexual display',
+  'nudity:erotica':               'Erotica',
+  'nudity:very_suggestive':       'Very suggestive',
+  'nudity:suggestive':            'Suggestive',
+  'nudity:mildly_suggestive':     'Mildly suggestive',
+  // Fine-grained suggestive sub-classes
+  'suggestive:visibly_undressed': 'Visibly undressed',
+  'suggestive:sextoy':            'Sex toy',
+  'suggestive:suggestive_focus':  'Suggestive focus',
+  'suggestive:suggestive_pose':   'Suggestive pose',
+  'suggestive:lingerie':          'Lingerie',
+  'suggestive:cleavage':          'Cleavage',
+  'suggestive:bikini':            'Bikini',
+  'suggestive:swimwear_one_piece': 'Swimwear',
+  // Hate / offensive (offensive-2.0)
+  'offensive:nazi':               'Nazi',
+  'offensive:asian_swastika':     'Asian swastika',
+  'offensive:confederate':        'Confederate',
+  'offensive:supremacist':        'Supremacist',
+  'offensive:terrorist':          'Terrorist',
+  'offensive:middle_finger':      'Middle finger',
+  // Minor detection (face-age)
+  'minor:detected':               'Minor detected',
 }
 
 const SOURCE_LABELS: Record<string, string> = {
   post:         'Post',
   auto_message: 'Auto-message',
+  message:      'Chat',
 }
 
-function scorePercent(scores: { nudity?: Record<string, number> }, category: string): string {
-  const key = category.replace('nudity:', '')
-  const val = scores.nudity?.[key] ?? 0
-  return `${Math.round(val * 100)}%`
+function maxMinorScore(scores: DetectionScores): number {
+  const all = [...(scores.faces ?? []), ...(scores.artificial_faces ?? [])]
+  return all.reduce((m, f) => Math.max(m, f.attributes?.age?.minor ?? 0), 0)
+}
+
+function categoryScore(scores: DetectionScores, category: string): number {
+  const [prefix, key] = category.split(':')
+
+  if (prefix === 'nudity') {
+    return (scores.nudity as Record<string, number | undefined> | undefined)?.[key] ?? 0
+  }
+  if (prefix === 'suggestive') {
+    const value = (scores.nudity?.suggestive_classes as Record<string, unknown> | undefined)?.[key]
+    return typeof value === 'number' ? value : 0
+  }
+  if (prefix === 'offensive') {
+    return (scores.offensive as Record<string, number | undefined> | undefined)?.[key] ?? 0
+  }
+  if (prefix === 'minor') {
+    return maxMinorScore(scores)
+  }
+  return 0
+}
+
+function scorePercent(scores: DetectionScores, category: string): string {
+  return `${Math.round(categoryScore(scores, category) * 100)}%`
+}
+
+/** Top non-flagged signals worth showing to admins for additional context. */
+function additionalSignals(
+  scores: DetectionScores,
+  flagged: string[],
+): Array<{ key: string; score: number }> {
+  const flaggedSet = new Set(flagged)
+  const candidates: Array<{ key: string; score: number }> = []
+
+  const nudity = scores.nudity
+  if (nudity) {
+    for (const k of ['sexual_activity', 'sexual_display', 'erotica', 'very_suggestive', 'suggestive', 'mildly_suggestive'] as const) {
+      if (flaggedSet.has(`nudity:${k}`)) continue
+      const score = nudity[k] ?? 0
+      if (score >= 0.30) candidates.push({ key: `nudity:${k}`, score })
+    }
+
+    const sc = (nudity.suggestive_classes ?? {}) as Record<string, unknown>
+    for (const k of ['visibly_undressed', 'sextoy', 'suggestive_focus', 'suggestive_pose', 'lingerie', 'cleavage', 'bikini', 'swimwear_one_piece'] as const) {
+      if (flaggedSet.has(`suggestive:${k}`)) continue
+      const value = sc[k]
+      const score = typeof value === 'number' ? value : 0
+      if (score >= 0.30) candidates.push({ key: `suggestive:${k}`, score })
+    }
+  }
+
+  if (scores.offensive) {
+    const offensive = scores.offensive as Record<string, number | undefined>
+    for (const k of ['nazi', 'asian_swastika', 'confederate', 'supremacist', 'terrorist', 'middle_finger'] as const) {
+      if (flaggedSet.has(`offensive:${k}`)) continue
+      const score = offensive[k] ?? 0
+      if (score >= 0.30) candidates.push({ key: `offensive:${k}`, score })
+    }
+  }
+
+  if (!flaggedSet.has('minor:detected')) {
+    const minor = maxMinorScore(scores)
+    if (minor >= 0.30) candidates.push({ key: 'minor:detected', score: minor })
+  }
+
+  return candidates.sort((a, b) => b.score - a.score).slice(0, 3)
 }
 
 export default async function MediaFlagsPage({ searchParams }: MediaFlagsPageProps) {
@@ -71,7 +159,10 @@ export default async function MediaFlagsPage({ searchParams }: MediaFlagsPagePro
 
   if (!showResolved) query = query.is('resolved_at', null)
 
-  const { data: flags } = await query
+  const [{ data: flags }, counts] = await Promise.all([
+    query,
+    getModerationCounts(),
+  ])
   const flagRows = (flags ?? []) as unknown as FlagRow[]
 
   // Collect unique creator/post IDs for batch fetching
@@ -119,7 +210,11 @@ export default async function MediaFlagsPage({ searchParams }: MediaFlagsPagePro
           Images flagged by automated nudity detection
         </p>
       </div>
-      <ModerationTabs mediaFlagsCount={showResolved ? undefined : flagRows.length} />
+      <ModerationTabs
+        flaggedCount={counts.flaggedChats}
+        reportsCount={counts.reports}
+        mediaFlagsCount={counts.mediaFlags}
+      />
 
       <div className="flex items-center justify-end mb-3">
         <div className="inline-flex rounded-lg border border-border overflow-hidden text-xs">
@@ -225,6 +320,23 @@ export default async function MediaFlagsPage({ searchParams }: MediaFlagsPagePro
                       </Badge>
                     ))}
                   </div>
+
+                  {/* Additional non-flagged signals from the v2.1 response */}
+                  {(() => {
+                    const extra = additionalSignals(flag.detection_scores, flag.flagged_categories)
+                    if (extra.length === 0) return null
+                    return (
+                      <div className="flex flex-wrap gap-1.5 mb-1.5">
+                        {extra.map(({ key, score }) => (
+                          <Badge key={key} variant="muted" className="text-[10px]">
+                            {CATEGORY_LABELS[key] ?? key}
+                            {' · '}
+                            {Math.round(score * 100)}%
+                          </Badge>
+                        ))}
+                      </div>
+                    )
+                  })()}
 
                   <p className="text-xs text-text-muted">
                     {new Date(flag.created_at).toLocaleString('en-US', {

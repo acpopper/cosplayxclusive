@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 
@@ -67,9 +68,18 @@ export function NewChatClient({ targetProfile }: Props) {
   }
 
   return (
-    <div className="flex flex-col flex-1 mx-auto w-full max-w-2xl px-4 pb-6">
+    <div className="flex flex-col flex-1 min-h-0 mx-auto w-full max-w-2xl px-4 pb-4">
       {/* Target user header */}
       <div className="flex items-center gap-3 py-4 border-b border-border mb-2">
+        <Link
+          href="/messages"
+          className="md:hidden -ml-1 h-8 w-8 flex items-center justify-center rounded-full text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors"
+          aria-label="Back to messages"
+        >
+          <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+          </svg>
+        </Link>
         <div className="h-9 w-9 rounded-full overflow-hidden bg-bg-elevated flex-shrink-0">
           {targetProfile.avatar_url ? (
             // eslint-disable-next-line @next/next/no-img-element

@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { ModerationTabs } from '../tabs'
 import { Badge } from '@/components/ui/badge'
 import { ReportActions } from './report-actions'
+import { getModerationCounts } from '@/lib/moderation-counts'
 
 interface ReportRow {
   id: string
@@ -55,7 +56,10 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
 
   if (!showResolved) reportsQuery = reportsQuery.is('resolved_at', null)
 
-  const { data: reports } = await reportsQuery
+  const [{ data: reports }, counts] = await Promise.all([
+    reportsQuery,
+    getModerationCounts(),
+  ])
 
   const reportRows = (reports ?? []) as ReportRow[]
 
@@ -114,7 +118,11 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
         <h1 className="text-2xl font-bold text-text-primary">Moderation</h1>
         <p className="text-sm text-text-secondary mt-1">Posts reported by users</p>
       </div>
-      <ModerationTabs reportsCount={showResolved ? undefined : postIds.length} />
+      <ModerationTabs
+        flaggedCount={counts.flaggedChats}
+        reportsCount={counts.reports}
+        mediaFlagsCount={counts.mediaFlags}
+      />
 
       <div className="flex items-center justify-end mb-3">
         <div className="inline-flex rounded-lg border border-border overflow-hidden text-xs">

@@ -36,6 +36,7 @@ export default async function HomePage() {
         <FeedClient
           initialPosts={initialPosts}
           viewerId={user.id}
+          viewerIsAdmin={profile.role === 'admin'}
         />
       </main>
 

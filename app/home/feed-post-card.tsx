@@ -2,9 +2,91 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { loadStripe } from '@stripe/stripe-js'
+import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js'
 import type { FeedPost, FeedComment } from '@/lib/types'
 import { Badge } from '@/components/ui/badge'
 import { ReportPostDialog } from '@/components/report-post-dialog'
+import { PostModerationModal } from '@/components/post-moderation-modal'
+import posthog from 'posthog-js'
+
+const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!)
+
+const STRIPE_APPEARANCE = {
+  theme: 'night' as const,
+  variables: {
+    colorPrimary:      '#e0407a',
+    colorBackground:   '#1a1a2e',
+    colorText:         '#e8e8f0',
+    colorTextSecondary:'#9999b3',
+    colorDanger:       '#f87171',
+    borderRadius:      '10px',
+    fontSizeBase:      '14px',
+  },
+}
+const ELEMENTS_OPTS = (clientSecret: string) => ({
+  clientSecret,
+  appearance: STRIPE_APPEARANCE,
+})
+
+// ─── Stripe payment form (used inside tip + ppv modals) ───────────────────────
+function StripePaymentForm({
+  label,
+  onSuccess,
+  onCancel,
+}: {
+  label: string
+  onSuccess: () => void
+  onCancel: () => void
+}) {
+  const stripe   = useStripe()
+  const elements = useElements()
+  const [loading, setLoading] = useState(false)
+  const [error, setError]     = useState<string | null>(null)
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!stripe || !elements) return
+    setLoading(true)
+    setError(null)
+
+    const { error: err, paymentIntent } = await stripe.confirmPayment({
+      elements,
+      confirmParams: { return_url: window.location.href },
+      redirect: 'if_required',
+    })
+
+    if (err) {
+      setError(err.message ?? 'Payment failed. Please try again.')
+      setLoading(false)
+    } else if (paymentIntent?.status === 'succeeded' || paymentIntent?.status === 'processing') {
+      onSuccess()
+    } else {
+      setError('Unexpected payment status. Contact support.')
+      setLoading(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      <PaymentElement />
+      {error && (
+        <p className="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded-xl px-3 py-2">
+          {error}
+        </p>
+      )}
+      <button type="submit" disabled={!stripe || loading}
+        className="w-full py-2.5 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent-hover transition-colors disabled:opacity-50 shadow-[0_0_20px_rgba(224,64,122,0.3)]">
+        {loading ? 'Processing…' : label}
+      </button>
+      <button type="button" onClick={onCancel} disabled={loading}
+        className="w-full py-2 text-sm text-text-muted hover:text-text-secondary transition-colors">
+        Cancel
+      </button>
+    </form>
+  )
+}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 function timeAgo(dateStr: string): string {
@@ -96,7 +178,7 @@ function Lightbox({
   )
 }
 
-// ─── Tip modal ────────────────────────────────────────────────────────────────
+// ─── Tip modal (3-step: amount → card → success) ─────────────────────────────
 function TipModal({
   post,
   onClose,
@@ -106,11 +188,12 @@ function TipModal({
   onClose: () => void
   onTipped: (amount: number) => void
 }) {
-  const [amount, setAmount] = useState<number>(5)
-  const [custom, setCustom] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [success, setSuccess] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [step, setStep]               = useState<'amount' | 'payment' | 'success'>('amount')
+  const [amount, setAmount]           = useState<number>(5)
+  const [custom, setCustom]           = useState('')
+  const [clientSecret, setSecret]     = useState<string | null>(null)
+  const [loading, setLoading]         = useState(false)
+  const [error, setError]             = useState<string | null>(null)
 
   useEffect(() => {
     document.body.style.overflow = 'hidden'
@@ -118,74 +201,98 @@ function TipModal({
   }, [])
 
   const finalAmount = custom ? Number(custom) : amount
+  const creatorName = post.creator.display_name || post.creator.username
 
-  async function handleSend() {
-    if (!finalAmount || finalAmount <= 0) { setError('Enter a valid amount'); return }
-    if (finalAmount < 1 || finalAmount > 500) { setError('Tip must be between $1 and $500'); return }
+  async function handleProceed() {
+    if (!finalAmount || finalAmount < 1 || finalAmount > 500) {
+      setError('Tip must be between $1 and $500'); return
+    }
     setError(null)
     setLoading(true)
+    posthog.capture('tip_checkout_started', { post_id: post.id, creator_id: post.creator_id, amount_usd: finalAmount })
     try {
-      const res = await fetch('/api/checkout/tip', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res  = await fetch('/api/checkout/tip', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ postId: post.id, amount: finalAmount }),
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Something went wrong'); return }
-      if (data.url) window.location.href = data.url
+      setSecret(data.clientSecret)
+      setStep('payment')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={step === 'amount' ? onClose : undefined}
+    >
       <div className="bg-bg-card border border-border rounded-2xl w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="p-6">
-          {success ? (
+
+          {step === 'success' && (
             <div className="text-center py-4">
               <p className="text-4xl mb-3">💝</p>
               <p className="font-semibold text-text-primary">Tip sent!</p>
-              <p className="text-sm text-text-muted mt-1">${finalAmount} sent to {post.creator.display_name || post.creator.username}</p>
+              <p className="text-sm text-text-muted mt-1">${finalAmount} to {creatorName}</p>
+              <button onClick={onClose} className="mt-4 px-4 py-2 rounded-xl bg-bg-elevated text-sm text-text-secondary hover:text-text-primary transition-colors">
+                Close
+              </button>
             </div>
-          ) : (
+          )}
+
+          {step === 'payment' && clientSecret && (
+            <>
+              <div className="flex items-center justify-between mb-4">
+                <button onClick={() => setStep('amount')} className="text-sm text-text-muted hover:text-text-secondary transition-colors">
+                  ← Back
+                </button>
+                <span className="text-sm font-semibold text-accent">${finalAmount} tip to {creatorName}</span>
+              </div>
+              <Elements stripe={stripePromise} options={ELEMENTS_OPTS(clientSecret)}>
+                <StripePaymentForm
+                  label={`Pay $${finalAmount} tip`}
+                  onSuccess={() => { onTipped(finalAmount); setStep('success') }}
+                  onCancel={onClose}
+                />
+              </Elements>
+            </>
+          )}
+
+          {step === 'amount' && (
             <>
               <h2 className="text-lg font-bold text-text-primary mb-1">Send a tip</h2>
               <p className="text-sm text-text-secondary mb-4">
-                Show some love to{' '}
-                <span className="font-semibold">{post.creator.display_name || post.creator.username}</span>
+                Show some love to <span className="font-semibold">{creatorName}</span>
               </p>
               <div className="grid grid-cols-5 gap-2 mb-3">
                 {TIP_PRESETS.map(p => (
-                  <button
-                    key={p}
-                    onClick={() => { setAmount(p); setCustom('') }}
-                    className={['py-2 rounded-xl text-sm font-semibold border transition-colors', amount === p && !custom ? 'bg-accent text-white border-accent' : 'border-border text-text-secondary hover:border-accent hover:text-text-primary'].join(' ')}
-                  >
+                  <button key={p} onClick={() => { setAmount(p); setCustom('') }}
+                    className={['py-2 rounded-xl text-sm font-semibold border transition-colors', amount === p && !custom ? 'bg-accent text-white border-accent' : 'border-border text-text-secondary hover:border-accent hover:text-text-primary'].join(' ')}>
                     ${p}
                   </button>
                 ))}
               </div>
               <div className="relative mb-4">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted text-sm">$</span>
-                <input
-                  type="number" min="1" placeholder="Custom amount" value={custom}
+                <input type="number" min="1" placeholder="Custom amount" value={custom}
                   onChange={e => { setCustom(e.target.value); setAmount(0) }}
                   className="w-full pl-7 pr-3 py-2.5 rounded-xl border border-border bg-bg-elevated text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent"
                 />
               </div>
               {error && <p className="text-xs text-error mb-3">{error}</p>}
               <div className="flex flex-col gap-2">
-                <button
-                  onClick={handleSend} disabled={loading}
-                  className="w-full py-2.5 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent-hover transition-colors disabled:opacity-50 shadow-[0_0_20px_rgba(224,64,122,0.3)]"
-                >
-                  {loading ? 'Redirecting…' : `Send $${finalAmount || '—'} tip`}
+                <button onClick={handleProceed} disabled={loading}
+                  className="w-full py-2.5 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent-hover transition-colors disabled:opacity-50 shadow-[0_0_20px_rgba(224,64,122,0.3)]">
+                  {loading ? 'Loading…' : `Continue · $${finalAmount || '—'}`}
                 </button>
                 <button onClick={onClose} disabled={loading} className="w-full py-2.5 rounded-xl text-sm text-text-muted hover:text-text-secondary transition-colors">Cancel</button>
               </div>
             </>
           )}
+
         </div>
       </div>
     </div>
@@ -229,6 +336,7 @@ function CommentSection({ post }: { post: FeedPost }) {
       if (res.ok && data.comment) {
         setComments(prev => [...prev, data.comment as FeedComment])
         setBody('')
+        posthog.capture('post_commented', { post_id: post.id, creator_id: post.creator_id })
       }
     } finally {
       setLoading(false)
@@ -287,28 +395,34 @@ function CommentSection({ post }: { post: FeedPost }) {
 interface FeedPostCardProps {
   post: FeedPost
   viewerId: string
+  viewerIsAdmin?: boolean
 }
 
-export function FeedPostCard({ post, viewerId }: FeedPostCardProps) {
+export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPostCardProps) {
+  const router      = useRouter()
   const displayUrls = post.hasAccess ? post.mediaUrls : post.previewUrls
-  const isLocked = !post.hasAccess && post.access_type !== 'free'
+  const isLocked    = !post.hasAccess && post.access_type !== 'free'
 
-  const [slideIndex, setSlideIndex] = useState(0)
+  const [slideIndex, setSlideIndex]     = useState(0)
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  const [likeCount, setLikeCount] = useState(post.likeCount)
-  const [hasLiked, setHasLiked] = useState(post.hasLiked)
+  const [likeCount, setLikeCount]   = useState(post.likeCount)
+  const [hasLiked, setHasLiked]     = useState(post.hasLiked)
   const [likeLoading, setLikeLoading] = useState(false)
 
   const [showComments, setShowComments] = useState(false)
   const [commentCount, setCommentCount] = useState(post.commentCount)
 
   const [totalTipped, setTotalTipped] = useState(post.totalTipped)
-  const [showTip, setShowTip] = useState(false)
+  const [showTip, setShowTip]         = useState(false)
 
-  const [menuOpen, setMenuOpen] = useState(false)
-  const [reportOpen, setReportOpen] = useState(false)
+  const [ppvSecret, setPpvSecret]   = useState<string | null>(null)
+  const [ppvLoading, setPpvLoading] = useState(false)
+
+  const [menuOpen, setMenuOpen]           = useState(false)
+  const [reportOpen, setReportOpen]       = useState(false)
+  const [moderationOpen, setModerationOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -342,6 +456,7 @@ export function FeedPostCard({ post, viewerId }: FeedPostCardProps) {
     setHasLiked(!wasLiked)
     setLikeCount(n => wasLiked ? Math.max(0, n - 1) : n + 1)
     setLikeLoading(true)
+    posthog.capture('post_liked', { post_id: post.id, creator_id: post.creator_id, action: wasLiked ? 'unlike' : 'like' })
     try {
       await fetch('/api/posts/like', {
         method: 'POST',
@@ -357,12 +472,24 @@ export function FeedPostCard({ post, viewerId }: FeedPostCardProps) {
     }
   }
 
+  async function handlePPVUnlock() {
+    setPpvLoading(true)
+    try {
+      const res  = await fetch('/api/checkout/ppv', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ postId: post.id }),
+      })
+      const data = await res.json()
+      if (data.clientSecret) setPpvSecret(data.clientSecret)
+    } finally {
+      setPpvLoading(false)
+    }
+  }
+
   const dateLabel = new Date(post.published_at).toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric',
   })
 
-  // Suppress own-post notification: viewerId check is server-side,
-  // but we still need viewerId for the creator check on display
   const isOwnPost = viewerId === post.creator_id
 
   return (
@@ -393,7 +520,7 @@ export function FeedPostCard({ post, viewerId }: FeedPostCardProps) {
           {post.access_type === 'subscriber_only' && post.hasAccess && <Badge variant="success" className="text-xs">Subscribed</Badge>}
           {post.access_type === 'ppv' && <Badge variant="warning" className="text-xs">{post.hasAccess ? 'Unlocked' : `$${post.price_usd?.toFixed(2)} PPV`}</Badge>}
 
-          {!isOwnPost && (
+          {(!isOwnPost || viewerIsAdmin) && (
             <div className="relative" ref={menuRef}>
               <button
                 onClick={() => setMenuOpen((o) => !o)}
@@ -405,13 +532,23 @@ export function FeedPostCard({ post, viewerId }: FeedPostCardProps) {
                 </svg>
               </button>
               {menuOpen && (
-                <div className="absolute right-0 top-full mt-1 w-40 bg-bg-card border border-border rounded-xl shadow-2xl overflow-hidden z-20">
-                  <button
-                    onClick={() => { setMenuOpen(false); setReportOpen(true) }}
-                    className="w-full px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-elevated transition-colors"
-                  >
-                    Report post
-                  </button>
+                <div className="absolute right-0 top-full mt-1 w-44 bg-bg-card border border-border rounded-xl shadow-2xl overflow-hidden z-20">
+                  {!isOwnPost && (
+                    <button
+                      onClick={() => { setMenuOpen(false); setReportOpen(true) }}
+                      className="w-full px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-elevated transition-colors"
+                    >
+                      Report post
+                    </button>
+                  )}
+                  {viewerIsAdmin && (
+                    <button
+                      onClick={() => { setMenuOpen(false); setModerationOpen(true) }}
+                      className="w-full px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-elevated transition-colors border-t border-border first:border-t-0"
+                    >
+                      Moderation stats
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -476,7 +613,18 @@ export function FeedPostCard({ post, viewerId }: FeedPostCardProps) {
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/50 backdrop-blur-sm">
                 <span className="text-4xl">{post.access_type === 'ppv' ? '🔒' : '⭐'}</span>
                 {post.access_type === 'subscriber_only' && <Badge variant="accent">Subscribers only</Badge>}
-                {post.access_type === 'ppv' && <Badge variant="warning">${post.price_usd?.toFixed(2)} PPV</Badge>}
+                {post.access_type === 'ppv' && (
+                  <>
+                    <Badge variant="warning">${post.price_usd?.toFixed(2)} PPV</Badge>
+                    <button
+                      onClick={handlePPVUnlock}
+                      disabled={ppvLoading}
+                      className="px-4 py-2 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent-hover transition-colors disabled:opacity-50 shadow-[0_0_15px_rgba(224,64,122,0.4)]"
+                    >
+                      {ppvLoading ? 'Loading…' : `Unlock · $${post.price_usd?.toFixed(2)}`}
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -546,14 +694,36 @@ export function FeedPostCard({ post, viewerId }: FeedPostCardProps) {
         <TipModal
           post={post}
           onClose={() => setShowTip(false)}
-          onTipped={amount => {
-            setTotalTipped(n => n + amount)
-          }}
+          onTipped={amount => setTotalTipped(n => n + amount)}
         />
+      )}
+
+      {ppvSecret && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={() => setPpvSecret(null)}>
+          <div className="bg-bg-card border border-border rounded-2xl w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="p-6">
+              <h2 className="text-lg font-bold text-text-primary mb-1">Unlock this post</h2>
+              <p className="text-sm text-text-secondary mb-5">
+                Pay <span className="font-semibold text-accent">${post.price_usd?.toFixed(2)}</span> to unlock exclusive content from <span className="font-semibold">{post.creator.display_name || post.creator.username}</span>.
+              </p>
+              <Elements stripe={stripePromise} options={{ clientSecret: ppvSecret, appearance: STRIPE_APPEARANCE }}>
+                <StripePaymentForm
+                  label={`Pay $${post.price_usd?.toFixed(2)}`}
+                  onSuccess={() => { setPpvSecret(null); router.refresh() }}
+                  onCancel={() => setPpvSecret(null)}
+                />
+              </Elements>
+            </div>
+          </div>
+        </div>
       )}
 
       {reportOpen && (
         <ReportPostDialog postId={post.id} onClose={() => setReportOpen(false)} />
+      )}
+
+      {moderationOpen && (
+        <PostModerationModal postId={post.id} onClose={() => setModerationOpen(false)} />
       )}
     </>
   )

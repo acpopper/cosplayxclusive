@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { CookiePreferencesButton } from '@/app/cookies/cookie-preferences-button'
 
 export function Footer() {
   return (
@@ -17,6 +18,12 @@ export function Footer() {
           <Link href="/privacy" className="hover:text-text-primary transition-colors">
             Privacy Policy
           </Link>
+          <Link href="/cookies" className="hover:text-text-primary transition-colors">
+            Cookie Policy
+          </Link>
+          <CookiePreferencesButton className="hover:text-text-primary transition-colors">
+            Cookie preferences
+          </CookiePreferencesButton>
           <a href="mailto:support@cosplayxclusive.com" className="hover:text-text-primary transition-colors">
             Support
           </a>

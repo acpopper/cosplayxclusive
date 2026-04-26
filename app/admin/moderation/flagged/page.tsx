@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { createServiceClient } from '@/lib/supabase/server'
 import { ModerationTabs } from '../tabs'
 import { FlagResolveButton } from './flag-resolve-button'
+import { getModerationCounts } from '@/lib/moderation-counts'
 
 interface FlagRow {
   id: string
@@ -51,7 +52,10 @@ export default async function FlaggedChatsPage({ searchParams }: FlaggedChatsPag
     .limit(500)
   if (!showResolved) flagsQuery = flagsQuery.is('resolved_at', null)
 
-  const { data: flags } = await flagsQuery
+  const [{ data: flags }, counts] = await Promise.all([
+    flagsQuery,
+    getModerationCounts(),
+  ])
 
   const flagRows = (flags ?? []) as FlagRow[]
 
@@ -117,7 +121,11 @@ export default async function FlaggedChatsPage({ searchParams }: FlaggedChatsPag
         <h1 className="text-2xl font-bold text-text-primary">Moderation</h1>
         <p className="text-sm text-text-secondary mt-1">Conversations flagged by warning patterns</p>
       </div>
-      <ModerationTabs flaggedCount={showResolved ? undefined : flaggedConversations.length} />
+      <ModerationTabs
+        flaggedCount={counts.flaggedChats}
+        reportsCount={counts.reports}
+        mediaFlagsCount={counts.mediaFlags}
+      />
 
       <div className="flex items-center justify-end mb-3">
         <div className="inline-flex rounded-lg border border-border overflow-hidden text-xs">

@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import posthog from 'posthog-js'
 
 export default function SignupPage() {
   const router = useRouter()
@@ -48,9 +49,13 @@ export default function SignupPage() {
 
     if (signUpError) {
       setError(signUpError.message)
+      posthog.captureException(signUpError)
       setLoading(false)
       return
     }
+
+    posthog.identify(username.toLowerCase(), { email })
+    posthog.capture('user_signed_up', { username: username.toLowerCase() })
 
     router.push('/onboarding')
     router.refresh()

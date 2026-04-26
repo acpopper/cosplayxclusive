@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { getStripe } from '@/lib/stripe'
+import { getPostHogClient } from '@/lib/posthog-server'
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
@@ -31,6 +32,11 @@ export async function POST(request: NextRequest) {
       .eq('id', sub.id)
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    const posthog = getPostHogClient()
+    posthog.capture({ distinctId: user.id, event: 'subscription_cancelled', properties: { creator_id: creatorId, subscription_type: 'free' } })
+    await posthog.shutdown()
+
     return NextResponse.json({ ok: true })
   }
 
@@ -65,6 +71,10 @@ export async function POST(request: NextRequest) {
     .from('subscriptions')
     .update({ status: 'canceled', updated_at: new Date().toISOString() })
     .eq('id', sub.id)
+
+  const posthog = getPostHogClient()
+  posthog.capture({ distinctId: user.id, event: 'subscription_cancelled', properties: { creator_id: creatorId, subscription_type: 'paid' } })
+  await posthog.shutdown()
 
   return NextResponse.json({ ok: true })
 }

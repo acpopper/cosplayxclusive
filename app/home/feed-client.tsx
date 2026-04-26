@@ -7,9 +7,10 @@ import { FeedPostCard } from './feed-post-card'
 interface FeedClientProps {
   initialPosts: FeedPost[]
   viewerId: string
+  viewerIsAdmin?: boolean
 }
 
-export function FeedClient({ initialPosts, viewerId }: FeedClientProps) {
+export function FeedClient({ initialPosts, viewerId, viewerIsAdmin = false }: FeedClientProps) {
   const [posts, setPosts] = useState<FeedPost[]>(initialPosts)
   const [loading, setLoading] = useState(false)
   const [hasMore, setHasMore] = useState(initialPosts.length === 20)
@@ -82,6 +83,7 @@ export function FeedClient({ initialPosts, viewerId }: FeedClientProps) {
           key={post.id}
           post={post}
           viewerId={viewerId}
+          viewerIsAdmin={viewerIsAdmin}
         />
       ))}
 

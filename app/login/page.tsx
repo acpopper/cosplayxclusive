@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import posthog from 'posthog-js'
 
 function LoginForm() {
   const router = useRouter()
@@ -23,13 +24,19 @@ function LoginForm() {
     setLoading(true)
 
     const supabase = createClient()
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
 
     if (error) {
       setError(error.message)
       setLoading(false)
       return
     }
+
+    const userId = data.user?.id
+    if (userId) {
+      posthog.identify(userId, { email })
+    }
+    posthog.capture('user_logged_in')
 
     router.push(next)
     router.refresh()

@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import { maybeSendAutoMessage, isReturningSubscriber } from '@/lib/auto-message'
 import { upsertGroupedNotification, maybeSendMilestone } from '@/lib/notifications'
 import { sendNewSubscriber, sendNewTip } from '@/lib/email'
+import { getPostHogClient } from '@/lib/posthog-server'
 
 // Service role client — no cookie handling needed in webhook
 function getServiceClient() {
@@ -68,6 +69,10 @@ export async function POST(request: NextRequest) {
               stripe_event_id: event.id,
             })
           }
+
+          const phTip = getPostHogClient()
+          phTip.capture({ distinctId: meta.fan_id, event: 'tip_completed', properties: { post_id: meta.post_id, amount_usd: amount, creator_id: post?.creator_id } })
+          await phTip.shutdown()
 
           if (post && fan && post.creator_id !== meta.fan_id) {
             const actor = {
@@ -153,7 +158,113 @@ export async function POST(request: NextRequest) {
               stripe_event_id: event.id,
             })
           }
+
+          const phPpv = getPostHogClient()
+          phPpv.capture({ distinctId: meta.fan_id, event: 'ppv_purchased', properties: { post_id: meta.post_id, amount_usd: post?.price_usd ?? 0, creator_id: post?.creator_id } })
+          await phPpv.shutdown()
         }
+        break
+      }
+
+      // Fires for destination-charge tips and PPV (platform-account PIs)
+      case 'payment_intent.succeeded': {
+        const pi   = event.data.object
+        const meta = pi.metadata || {}
+        const amountUsd = pi.amount / 100
+
+        if (meta.type === 'tip' && meta.fan_id && meta.post_id) {
+          await supabase.from('post_tips').insert({
+            post_id:    meta.post_id,
+            fan_id:     meta.fan_id,
+            amount_usd: amountUsd,
+          })
+
+          const [{ data: post }, { data: fan }] = await Promise.all([
+            supabase.from('posts').select('creator_id, caption').eq('id', meta.post_id).single(),
+            supabase.from('profiles').select('username, display_name, avatar_url').eq('id', meta.fan_id).single(),
+          ])
+
+          if (post) {
+            await supabase.from('transactions').insert({
+              creator_id:      post.creator_id,
+              fan_id:          meta.fan_id,
+              type:            'tip',
+              amount_usd:      amountUsd * 0.80,
+              stripe_event_id: event.id,
+            })
+          }
+
+          if (post && fan && post.creator_id !== meta.fan_id) {
+            const actor = {
+              user_id:      meta.fan_id,
+              username:     fan.username,
+              display_name: fan.display_name,
+              avatar_url:   fan.avatar_url,
+            }
+
+            const { data: tipsData } = await supabase
+              .from('post_tips').select('amount_usd').eq('post_id', meta.post_id)
+            const totalTipAmount = (tipsData ?? []).reduce((s, t) => s + Number(t.amount_usd), 0)
+            const tipCount       = tipsData?.length ?? 1
+
+            const newCount = await upsertGroupedNotification(supabase, {
+              creatorId:   post.creator_id,
+              groupKey:    `post_tipped:${meta.post_id}`,
+              type:        'post_tipped',
+              actor,
+              postId:      meta.post_id,
+              postCaption: post.caption,
+              extra:       { total_tip_amount: totalTipAmount },
+            })
+
+            await maybeSendMilestone(supabase, {
+              creatorId:   post.creator_id,
+              type:        'post_tip_milestone',
+              postId:      meta.post_id,
+              postCaption: post.caption,
+              count:       tipCount,
+              extra:       { total_tip_amount: totalTipAmount },
+            })
+
+            if (newCount === 1) {
+              const { data: { user: creatorUser } } = await supabase.auth.admin.getUserById(post.creator_id)
+              if (creatorUser?.email) {
+                const { data: creatorProfile } = await supabase
+                  .from('profiles').select('username').eq('id', post.creator_id).single()
+                await sendNewTip(
+                  creatorUser.email,
+                  creatorProfile?.username ?? '',
+                  fan.display_name || fan.username,
+                  amountUsd,
+                  post.caption,
+                )
+              }
+            }
+          }
+        }
+
+        if (meta.type === 'ppv' && meta.fan_id && meta.post_id) {
+          const { data: post } = await supabase
+            .from('posts').select('price_usd, creator_id').eq('id', meta.post_id).single()
+
+          await supabase.from('post_purchases').upsert({
+            fan_id:                   meta.fan_id,
+            post_id:                  meta.post_id,
+            stripe_payment_intent_id: pi.id,
+            amount_usd:               post?.price_usd || amountUsd,
+          }, { onConflict: 'fan_id,post_id', ignoreDuplicates: true })
+
+          if (post) {
+            await supabase.from('transactions').insert({
+              creator_id:      post.creator_id,
+              fan_id:          meta.fan_id,
+              type:            'ppv',
+              amount_usd:      amountUsd * 0.80,
+              stripe_event_id: event.id,
+            })
+          }
+        }
+
         break
       }
 
@@ -232,6 +343,19 @@ export async function POST(request: NextRequest) {
               },
             })
           }
+
+          const phSub = getPostHogClient()
+          phSub.capture({
+            distinctId: meta.fan_id,
+            event: 'subscription_completed',
+            properties: {
+              creator_id: meta.creator_id,
+              subscription_price_usd: creator?.subscription_price_usd,
+              is_returning: isReturn,
+              stripe_subscription_id: subscription.id,
+            },
+          })
+          await phSub.shutdown()
 
           // Send creator's auto-message to new/returning paid subscriber
           await maybeSendAutoMessage(supabase, meta.fan_id, meta.creator_id, isReturn)

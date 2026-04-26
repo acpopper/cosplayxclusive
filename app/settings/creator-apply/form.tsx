@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import type { Profile } from '@/lib/types'
+import posthog from 'posthog-js'
 
 interface Props {
   profile: Profile
@@ -67,6 +68,12 @@ export function CreatorApplyForm({ profile, isReapply }: Props) {
       setLoading(false)
       return
     }
+
+    posthog.capture('creator_application_submitted', {
+      is_reapply: isReapply,
+      subscription_price_usd: priceNum,
+      has_social_links: Boolean(socialLinks.trim()),
+    })
 
     router.push('/settings')
     router.refresh()

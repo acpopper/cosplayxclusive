@@ -1,7 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import sharp from 'sharp'
-import { checkImageContent } from '@/lib/sightengine'
+import { checkImageContent, type ContentFlagResult } from '@/lib/sightengine'
+import { getPostHogClient } from '@/lib/posthog-server'
+
+interface PrecheckResult {
+  index:      number
+  flagged:    boolean
+  categories: string[]
+  maxScore:   number
+  scores:     ContentFlagResult['scores']
+}
+
+function parsePrecheckResults(raw: string | null): Map<number, PrecheckResult> | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as PrecheckResult[]
+    if (!Array.isArray(parsed)) return null
+    const map = new Map<number, PrecheckResult>()
+    for (const entry of parsed) {
+      if (typeof entry?.index === 'number') map.set(entry.index, entry)
+    }
+    return map
+  } catch {
+    return null
+  }
+}
 
 async function makePreviewBuffer(buffer: Buffer): Promise<Buffer> {
   return sharp(buffer)
@@ -73,6 +97,11 @@ export async function POST(request: NextRequest) {
   const videoPaths = formData.getAll('videoPaths') as string[]
   const videoThumbFiles = formData.getAll('videoThumbs') as File[]
 
+  // If the client already pre-screened these images via /api/posts/precheck, it
+  // sends back the per-image flag/score results so we don't pay for a second
+  // Sightengine call. Indexed by image position (0-based) within imageFiles.
+  const precheckResults = parsePrecheckResults(formData.get('precheckResults') as string | null)
+
   if (mediaOrder.length === 0) {
     return NextResponse.json({ error: 'No media provided' }, { status: 400 })
   }
@@ -91,6 +120,21 @@ export async function POST(request: NextRequest) {
   }
   const pendingFlags: PendingFlag[] = []
 
+  // Per-slot moderation results, aligned 1:1 with media_paths. Images carry
+  // the full SightEngine response (even when not flagged) so admins can audit
+  // raw scores from /api/admin/posts/[postId]/moderation. Videos are recorded
+  // as { scanned: false } so the array stays index-aligned with media_paths.
+  interface ModerationEntry {
+    index:      number
+    type:       'image' | 'video'
+    scanned:    boolean
+    flagged:    boolean
+    categories: string[]
+    max_score:  number
+    scores:     ContentFlagResult['scores']
+  }
+  const mediaModeration: ModerationEntry[] = []
+
   const base = Date.now()
   let imageIdx = 0
   let videoIdx = 0
@@ -99,17 +143,25 @@ export async function POST(request: NextRequest) {
     const type = mediaOrder[i]
 
     if (type === 'image') {
+      const fileIndex = imageIdx
       const file = imageFiles[imageIdx++]
       if (!file) continue
       const ext = file.name.split('.').pop()
       const path = `${user.id}/${base}_${i}.${ext}`
       const rawBuffer = Buffer.from(await file.arrayBuffer())
 
-      // Run SightEngine check on the original (pre-watermark) buffer in parallel with watermarking
-      const [flagResult, buffer] = await Promise.all([
-        checkImageContent(rawBuffer, file.type),
-        applyWatermark(rawBuffer, profile.username),
-      ])
+      // Use precheck results if the client already screened this image,
+      // otherwise call SightEngine here (in parallel with watermarking).
+      const cached = precheckResults?.get(fileIndex)
+      const flagResult: ContentFlagResult = cached
+        ? {
+            flagged:    cached.flagged,
+            categories: cached.categories,
+            maxScore:   cached.maxScore,
+            scores:     cached.scores,
+          }
+        : await checkImageContent(rawBuffer, file.type)
+      const buffer = await applyWatermark(rawBuffer, profile.username)
 
       const { error: origErr } = await service.storage
         .from('originals')
@@ -134,6 +186,16 @@ export async function POST(request: NextRequest) {
         }
       } catch { /* skip */ }
 
+      mediaModeration.push({
+        index:      mediaPaths.length - 1,
+        type:       'image',
+        scanned:    true,
+        flagged:    flagResult.flagged,
+        categories: flagResult.categories,
+        max_score:  flagResult.maxScore,
+        scores:     flagResult.scores,
+      })
+
       if (flagResult.flagged) {
         pendingFlags.push({
           storagePath: path,
@@ -152,6 +214,16 @@ export async function POST(request: NextRequest) {
       if (!videoPath) continue
       mediaPaths.push(videoPath)
       mediaTypes.push('video')
+
+      mediaModeration.push({
+        index:      mediaPaths.length - 1,
+        type:       'video',
+        scanned:    false,
+        flagged:    false,
+        categories: [],
+        max_score:  0,
+        scores:     {},
+      })
 
       // Generate a blurred still preview from the client-captured thumbnail
       if (thumbFile) {
@@ -175,6 +247,7 @@ export async function POST(request: NextRequest) {
     media_paths: mediaPaths,
     preview_paths: previewPaths,
     media_types: mediaTypes,
+    media_moderation: mediaModeration,
     published_at: new Date().toISOString(),
   }
 
@@ -190,6 +263,20 @@ export async function POST(request: NextRequest) {
   if (insertErr || !insertedPost) {
     return NextResponse.json({ error: insertErr?.message ?? 'Insert failed' }, { status: 500 })
   }
+
+  const posthog = getPostHogClient()
+  posthog.capture({
+    distinctId: user.id,
+    event: 'post_created',
+    properties: {
+      post_id: insertedPost.id,
+      access_type: accessType,
+      media_count: mediaPaths.length,
+      has_caption: Boolean(caption),
+      price_usd: accessType === 'ppv' && priceRaw ? parseFloat(priceRaw) : undefined,
+    },
+  })
+  await posthog.shutdown()
 
   // Persist any SightEngine flags as a best-effort audit (errors don't fail the request)
   if (pendingFlags.length > 0) {
