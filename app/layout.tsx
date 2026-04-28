@@ -11,14 +11,34 @@ const geist = Geist({
   variable: "--font-geist-sans",
 });
 
+const SITE_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://cosplayxclusive.com";
+
 export const metadata: Metadata = {
-  title: "CosplayXclusive — Premium Cosplay Creator Platform",
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default:  "CosplayXclusive — Premium Cosplay Creator Platform",
+    template: "%s — CosplayXclusive",
+  },
   description:
     "Subscribe to your favorite cosplay creators. Exclusive content, premium photos, and direct fan support.",
+  alternates: {
+    canonical: "/",
+  },
   openGraph: {
-    title: "CosplayXclusive",
+    title:       "CosplayXclusive",
     description: "Premium cosplay creator platform",
-    type: "website",
+    url:         "/",
+    siteName:    "CosplayXclusive",
+    type:        "website",
+  },
+  twitter: {
+    card:        "summary_large_image",
+    title:       "CosplayXclusive",
+    description: "Premium cosplay creator platform",
+  },
+  robots: {
+    index:  true,
+    follow: true,
   },
 };
 

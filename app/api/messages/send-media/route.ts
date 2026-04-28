@@ -1,10 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server'
+import sharp from 'sharp'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { checkImageContent } from '@/lib/sightengine'
 
-const BUCKET = 'previews'
+const BUCKET_PREVIEW = 'previews'
+const BUCKET_ORIGINAL = 'originals'
 const MEDIA_PREFIX = 'chat-media'
 const MAX_IMAGES = 4
+
+async function makeBlurredPreview(buffer: Buffer): Promise<Buffer> {
+  return sharp(buffer)
+    .resize({ width: 600, withoutEnlargement: true })
+    .blur(20)
+    .jpeg({ quality: 40 })
+    .toBuffer()
+}
+
+async function applyWatermark(buffer: Buffer, username: string): Promise<Buffer> {
+  const image = sharp(buffer)
+  const { width = 800, height = 600 } = await image.metadata()
+  const label       = `cosplayxclusive.com/@${username}`
+  const fontSize    = Math.max(14, Math.round(width * 0.028))
+  const approxTextW = Math.round(label.length * fontSize * 0.55)
+  const approxTextH = Math.round(fontSize * 1.4)
+  const padH = 10, padV = 6, margin = 18
+  const bgW = approxTextW + padH * 2
+  const bgH = approxTextH + padV * 2
+  const bgX = width  - bgW - margin
+  const bgY = height - bgH - margin
+
+  const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+    <rect x="${bgX}" y="${bgY}" width="${bgW}" height="${bgH}" rx="5" fill="rgba(0,0,0,0.55)"/>
+    <text x="${bgX + padH}" y="${bgY + bgH - padV - 2}"
+      font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="bold" fill="white">${label}</text>
+  </svg>`
+
+  return image.composite([{ input: Buffer.from(svg), blend: 'over' }]).toBuffer()
+}
 
 /**
  * Sends a chat message with image attachments. Restricted to approved
@@ -19,7 +51,7 @@ export async function POST(request: NextRequest) {
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('creator_status, role')
+    .select('creator_status, role, username')
     .eq('id', user.id)
     .single()
 
@@ -34,6 +66,12 @@ export async function POST(request: NextRequest) {
   const replyToIdRaw = formData.get('replyToId') as string | null
   const replyToId = replyToIdRaw && /^[0-9a-f-]{36}$/i.test(replyToIdRaw) ? replyToIdRaw : null
   const files = formData.getAll('files') as File[]
+
+  // PPV pricing — optional, creator-set. Empty/0 means free media.
+  const priceRaw = (formData.get('price_usd') as string | null)?.trim() ?? ''
+  const priceParsed = priceRaw ? parseFloat(priceRaw) : 0
+  const priceUsd = Number.isFinite(priceParsed) && priceParsed >= 1 ? priceParsed : 0
+  const isPpv = priceUsd >= 1
 
   if (!conversationId) {
     return NextResponse.json({ error: 'Missing conversationId' }, { status: 400 })
@@ -85,50 +123,92 @@ export async function POST(request: NextRequest) {
   }
 
   const service = createServiceClient()
-  const uploadedPaths: string[] = []
+  const previewPaths:  string[] = []
+  const originalPaths: string[] = []
 
   interface PendingFlag {
-    storagePath: string
-    categories:  string[]
-    maxScore:    number
-    scores:      object
+    storageBucket: string
+    storagePath:   string
+    previewPath:   string | null
+    categories:    string[]
+    maxScore:      number
+    scores:        object
   }
   const pendingFlags: PendingFlag[] = []
   const base = Date.now()
 
   for (const c of checks) {
     const ext = c.file.name.split('.').pop() ?? 'jpg'
-    const path = `${MEDIA_PREFIX}/${user.id}/${conversationId}/${base}_${c.index}.${ext}`
-    const { error: upErr } = await service.storage
-      .from(BUCKET)
-      .upload(path, c.buffer, { contentType: c.file.type, upsert: false })
-    if (upErr) {
-      return NextResponse.json({ error: `Upload failed: ${upErr.message}` }, { status: 500 })
-    }
-    uploadedPaths.push(path)
+    const slot = `${MEDIA_PREFIX}/${user.id}/${conversationId}/${base}_${c.index}`
+    const previewPath  = `${slot}_preview.jpg`
+    const originalPath = `${slot}.${ext}`
 
-    if (c.result.flagged) {
-      pendingFlags.push({
-        storagePath: path,
-        categories:  c.result.categories,
-        maxScore:    c.result.maxScore,
-        scores:      c.result.scores,
-      })
+    if (isPpv) {
+      // Dual upload: blurred preview in public bucket + watermarked original in private bucket.
+      const watermarked = await applyWatermark(c.buffer, profile.username)
+      const blurred     = await makeBlurredPreview(c.buffer)
+
+      const [origUp, prevUp] = await Promise.all([
+        service.storage.from(BUCKET_ORIGINAL).upload(originalPath, watermarked, { contentType: c.file.type, upsert: false }),
+        service.storage.from(BUCKET_PREVIEW) .upload(previewPath,  blurred,     { contentType: 'image/jpeg', upsert: false }),
+      ])
+      if (origUp.error || prevUp.error) {
+        return NextResponse.json({ error: `Upload failed: ${origUp.error?.message ?? prevUp.error?.message}` }, { status: 500 })
+      }
+      originalPaths.push(originalPath)
+      previewPaths.push(previewPath)
+
+      if (c.result.flagged) {
+        pendingFlags.push({
+          storageBucket: BUCKET_ORIGINAL,
+          storagePath:   originalPath,
+          previewPath,
+          categories:    c.result.categories,
+          maxScore:      c.result.maxScore,
+          scores:        c.result.scores,
+        })
+      }
+    } else {
+      // Free chat media — keep the legacy single-bucket flow (public previews).
+      const { error: upErr } = await service.storage
+        .from(BUCKET_PREVIEW)
+        .upload(originalPath, c.buffer, { contentType: c.file.type, upsert: false })
+      if (upErr) {
+        return NextResponse.json({ error: `Upload failed: ${upErr.message}` }, { status: 500 })
+      }
+      previewPaths.push(originalPath)
+
+      if (c.result.flagged) {
+        pendingFlags.push({
+          storageBucket: BUCKET_PREVIEW,
+          storagePath:   originalPath,
+          previewPath:   null,
+          categories:    c.result.categories,
+          maxScore:      c.result.maxScore,
+          scores:        c.result.scores,
+        })
+      }
     }
   }
 
   // Insert the message via service role so the body check (which needs the
   // updated migration) can pass even when body is empty.
-  const { error: msgErr } = await service.from('messages').insert({
-    conversation_id: conversationId,
-    sender_id:       user.id,
-    body,
-    media_paths:     uploadedPaths,
-    reply_to_id:     replyToId,
-  })
+  const { data: inserted, error: msgErr } = await service
+    .from('messages')
+    .insert({
+      conversation_id: conversationId,
+      sender_id:       user.id,
+      body,
+      media_paths:     previewPaths,
+      media_originals: isPpv ? originalPaths : null,
+      price_usd:       isPpv ? priceUsd : null,
+      reply_to_id:     replyToId,
+    })
+    .select('id')
+    .single()
 
-  if (msgErr) {
-    return NextResponse.json({ error: msgErr.message }, { status: 500 })
+  if (msgErr || !inserted) {
+    return NextResponse.json({ error: msgErr?.message ?? 'Insert failed' }, { status: 500 })
   }
 
   if (pendingFlags.length > 0) {
@@ -137,9 +217,9 @@ export async function POST(request: NextRequest) {
         source_type:        'message',
         post_id:            null,
         creator_id:         user.id,
-        storage_bucket:     BUCKET,
+        storage_bucket:     f.storageBucket,
         storage_path:       f.storagePath,
-        preview_path:       null,
+        preview_path:       f.previewPath,
         flagged_categories: f.categories,
         max_score:          f.maxScore,
         detection_scores:   f.scores,
@@ -147,5 +227,10 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  return NextResponse.json({ ok: true, mediaPaths: uploadedPaths })
+  return NextResponse.json({
+    ok:        true,
+    messageId: inserted.id,
+    mediaPaths: previewPaths,
+    priceUsd:  isPpv ? priceUsd : null,
+  })
 }

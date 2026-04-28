@@ -297,6 +297,15 @@ export function Nav({ profile }: NavProps) {
                     </span>
                   )}
                 </Link>
+                <Link
+                  href="/collections"
+                  className={['flex items-center gap-1.5', topLinkClasses(pathname.startsWith('/collections'))].join(' ')}
+                >
+                  <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={1.75} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                  </svg>
+                  Collections
+                </Link>
                 {hasCreatorDashboard && (
                   <Link href="/dashboard" className={topLinkClasses(pathname.startsWith('/dashboard'))}>
                     Dashboard
@@ -498,6 +507,16 @@ export function Nav({ profile }: NavProps) {
                     {unreadMsgs > 99 ? '99+' : unreadMsgs}
                   </span>
                 )}
+              </Link>
+              <Link
+                href="/collections"
+                onClick={closeDrawer}
+                className={drawerLinkClasses(pathname.startsWith('/collections'))}
+              >
+                <svg className="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" strokeWidth={1.75} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                </svg>
+                <span className="flex-1">Collections</span>
               </Link>
               {hasCreatorDashboard && (
                 <Link href="/dashboard" onClick={closeDrawer} className={drawerLinkClasses(pathname.startsWith('/dashboard'))}>

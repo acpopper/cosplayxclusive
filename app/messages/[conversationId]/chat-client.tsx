@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { PaymentModal } from '@/components/payment-modal'
 
 interface SenderProfile {
   id: string
@@ -24,7 +25,10 @@ interface MessageItem {
   id: string
   sender_id: string
   body: string
-  media_paths: string[]   // paths in previews/chat-media/ (public bucket)
+  media_paths: string[]    // paths in `previews/chat-media/` (public bucket)
+  media_urls:  string[]    // resolved display URLs — preview if locked PPV, signed originals when accessible
+  price_usd:   number | null
+  purchased:   boolean     // true if viewer can see originals (sender always true; fans after paying)
   reply_to_id: string | null
   created_at: string
   sender: SenderProfile | null
@@ -59,6 +63,80 @@ const FLAG_LABELS: Record<string, string> = {
   'suggestive:sextoy':            'sex toys',
 }
 
+function ChatLightbox({
+  urls,
+  initialIndex,
+  onClose,
+}: {
+  urls:         string[]
+  initialIndex: number
+  onClose:      () => void
+}) {
+  const [i, setI] = useState(initialIndex)
+
+  useEffect(() => {
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = '' }
+  }, [])
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape')    onClose()
+      if (e.key === 'ArrowLeft')  setI((p) => Math.max(0, p - 1))
+      if (e.key === 'ArrowRight') setI((p) => Math.min(urls.length - 1, p + 1))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [urls.length, onClose])
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] bg-black/95 flex items-center justify-center"
+      onClick={onClose}
+    >
+      <div className="relative" onClick={(e) => e.stopPropagation()}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={urls[i]}
+          alt=""
+          className="max-h-screen max-w-full object-contain select-none"
+          draggable={false}
+        />
+      </div>
+      <button
+        onClick={onClose}
+        className="absolute top-4 right-4 h-9 w-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+        aria-label="Close"
+      >
+        ✕
+      </button>
+      {i > 0 && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setI((p) => p - 1) }}
+          className="absolute left-4 top-1/2 -translate-y-1/2 h-11 w-11 rounded-full bg-white/10 hover:bg-white/20 text-white text-3xl leading-none flex items-center justify-center transition-colors"
+          aria-label="Previous"
+        >
+          ‹
+        </button>
+      )}
+      {i < urls.length - 1 && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setI((p) => p + 1) }}
+          className="absolute right-4 top-1/2 -translate-y-1/2 h-11 w-11 rounded-full bg-white/10 hover:bg-white/20 text-white text-3xl leading-none flex items-center justify-center transition-colors"
+          aria-label="Next"
+        >
+          ›
+        </button>
+      )}
+      {urls.length > 1 && (
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-black/60 text-white text-sm px-3 py-1 rounded-full">
+          {i + 1} / {urls.length}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function AdminBadge() {
   return (
     <svg
@@ -90,8 +168,13 @@ export function ChatClient({
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState('')
   const [pendingImages, setPendingImages] = useState<{ file: File; localUrl: string }[]>([])
+  const [pendingPriceRaw, setPendingPriceRaw] = useState('')
   const [mediaWarning, setMediaWarning] = useState<{ hits: MediaHit[] } | null>(null)
   const [replyingTo, setReplyingTo] = useState<MessageItem | null>(null)
+  const [lightbox, setLightbox] = useState<{ urls: string[]; index: number } | null>(null)
+  const [unlocking, setUnlocking] = useState<{ messageId: string; priceUsd: number } | null>(null)
+  const [unlockSecret, setUnlockSecret] = useState<string | null>(null)
+  const [unlockLoading, setUnlockLoading] = useState(false)
   const [favorite, setFavorite] = useState(initialFavorite)
   const [favoriteBusy, setFavoriteBusy] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -109,9 +192,13 @@ export function ChatClient({
   // Revoke any leftover object URLs on unmount (navigating away mid-compose).
   const pendingImagesRef = useRef(pendingImages)
   useEffect(() => { pendingImagesRef.current = pendingImages }, [pendingImages])
+  // Blob URLs handed off to optimistic messages — kept alive until the chat
+  // unmounts so the sender keeps seeing their own attached image.
+  const optimisticBlobsRef = useRef<string[]>([])
   useEffect(() => {
     return () => {
       for (const p of pendingImagesRef.current) URL.revokeObjectURL(p.localUrl)
+      for (const url of optimisticBlobsRef.current) URL.revokeObjectURL(url)
     }
   }, [])
 
@@ -204,13 +291,17 @@ export function ChatClient({
             id: string
             sender_id: string
             body: string
-            media_paths: string[]
+            media_paths: string[] | null
+            media_originals: string[] | null
+            price_usd: number | null
             reply_to_id: string | null
             created_at: string
           }
           setMessages((prev) => {
+            // Dedupe: optimistic-send already inserted this id (with local blob
+            // URLs the realtime payload can't reproduce), so keep that copy.
             if (prev.some((m) => m.id === row.id)) return prev
-            // Resolve quoted reply target from messages already in view.
+
             const target = row.reply_to_id ? prev.find((m) => m.id === row.reply_to_id) : null
             const reply_to: ReplyTarget | null = target
               ? {
@@ -221,13 +312,27 @@ export function ChatClient({
                   has_media:           target.media_paths.length > 0,
                 }
               : null
+
+            const paths    = row.media_paths ?? []
+            const isPpv    = row.price_usd != null
+            const isSender = row.sender_id === currentUserProfile.id
+            // For PPV in realtime we always show the public (preview-bucket)
+            // URL — when locked it's blurred; recipients unlock via payment +
+            // page refresh, which re-renders with signed originals server-side.
+            const mediaUrls = paths.map(
+              (p) => `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/previews/${p}`,
+            )
+
             return [
               ...prev,
               {
                 id:           row.id,
                 sender_id:    row.sender_id,
                 body:         row.body,
-                media_paths:  row.media_paths ?? [],
+                media_paths:  paths,
+                media_urls:   mediaUrls,
+                price_usd:    row.price_usd,
+                purchased:    isPpv ? isSender : true,
                 reply_to_id:  row.reply_to_id,
                 created_at:   row.created_at,
                 sender:       participantMap[row.sender_id] ?? null,
@@ -363,22 +468,74 @@ export function ChatClient({
     })
   }
 
-  async function sendMediaRequest(confirmFlagged: boolean): Promise<{ ok: true } | { ok: false; flagged?: { hits: MediaHit[] }; message?: string }> {
+  type SendMediaResult =
+    | { ok: true; messageId: string; mediaPaths: string[]; priceUsd: number | null }
+    | { ok: false; flagged?: { hits: MediaHit[] }; message?: string }
+
+  async function sendMediaRequest(confirmFlagged: boolean): Promise<SendMediaResult> {
     const fd = new FormData()
     fd.append('conversationId', conversationId)
     fd.append('body', body.trim())
     if (confirmFlagged) fd.append('confirmFlagged', 'true')
     if (replyingTo) fd.append('replyToId', replyingTo.id)
+    const priceNum = parseFloat(pendingPriceRaw)
+    if (Number.isFinite(priceNum) && priceNum >= 1) {
+      fd.append('price_usd', String(priceNum))
+    }
     for (const p of pendingImages) fd.append('files', p.file)
 
-    const res = await fetch('/api/messages/send-media', { method: 'POST', body: fd })
-    if (res.ok) return { ok: true }
+    const res  = await fetch('/api/messages/send-media', { method: 'POST', body: fd })
+    const json = await res.json().catch(() => ({} as Record<string, unknown>))
 
-    const json = await res.json().catch(() => ({} as { error?: string; flagged?: boolean; hits?: MediaHit[] }))
+    if (res.ok && json.messageId) {
+      return {
+        ok:         true,
+        messageId:  json.messageId as string,
+        mediaPaths: (json.mediaPaths as string[]) ?? [],
+        priceUsd:   (json.priceUsd as number | null) ?? null,
+      }
+    }
     if (res.status === 422 && json.flagged && Array.isArray(json.hits)) {
       return { ok: false, flagged: { hits: json.hits as MediaHit[] } }
     }
-    return { ok: false, message: json.error ?? `Failed to send (${res.status})` }
+    return { ok: false, message: (json.error as string | undefined) ?? `Failed to send (${res.status})` }
+  }
+
+  function appendOptimisticMediaMessage(result: { messageId: string; mediaPaths: string[]; priceUsd: number | null }) {
+    // Hand the local blob URLs to the optimistic message so the sender
+    // immediately sees their own image — kept alive until the chat unmounts.
+    const localUrls = pendingImages.map((p) => p.localUrl)
+    optimisticBlobsRef.current.push(...localUrls)
+
+    const target = replyingTo
+    const reply_to: ReplyTarget | null = target
+      ? {
+          id:                  target.id,
+          sender_username:     target.sender?.username ?? '',
+          sender_display_name: target.sender?.display_name ?? null,
+          body:                target.body,
+          has_media:           target.media_paths.length > 0,
+        }
+      : null
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id:           result.messageId,
+        sender_id:    currentUserProfile.id,
+        body:         body.trim(),
+        media_paths:  result.mediaPaths,
+        media_urls:   localUrls,
+        price_usd:    result.priceUsd,
+        purchased:    true, // sender always sees originals
+        reply_to_id:  target?.id ?? null,
+        created_at:   new Date().toISOString(),
+        sender:       currentUserProfile,
+        reply_to,
+        like_count:   0,
+        has_liked:    false,
+      },
+    ])
   }
 
   async function handleSend() {
@@ -401,6 +558,7 @@ export function ChatClient({
           setSendError(result.message ?? 'Failed to send.')
           return
         }
+        appendOptimisticMediaMessage(result)
       } else {
         const { error } = await supabase
           .from('messages')
@@ -416,9 +574,10 @@ export function ChatClient({
         }
       }
 
-      // Success — clear input + previews + reply target
-      for (const p of pendingImages) URL.revokeObjectURL(p.localUrl)
+      // Success — clear input + previews + reply target. NB: blob URLs are
+      // owned by the optimistic message now (cleaned up on unmount).
       setPendingImages([])
+      setPendingPriceRaw('')
       setBody('')
       setReplyingTo(null)
     } finally {
@@ -436,12 +595,35 @@ export function ChatClient({
         setSendError(result.message ?? 'Failed to send.')
         return
       }
-      for (const p of pendingImages) URL.revokeObjectURL(p.localUrl)
+      appendOptimisticMediaMessage(result)
       setPendingImages([])
+      setPendingPriceRaw('')
       setBody('')
       setReplyingTo(null)
     } finally {
       setSending(false)
+    }
+  }
+
+  async function startUnlock(messageId: string, priceUsd: number) {
+    if (unlockLoading) return
+    setUnlocking({ messageId, priceUsd })
+    setUnlockLoading(true)
+    try {
+      const res = await fetch('/api/checkout/message-ppv', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ messageId }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.clientSecret) {
+        setUnlocking(null)
+        setSendError(data.error ?? 'Could not start checkout.')
+        return
+      }
+      setUnlockSecret(data.clientSecret)
+    } finally {
+      setUnlockLoading(false)
     }
   }
 
@@ -622,21 +804,73 @@ export function ChatClient({
                   </button>
                 )}
 
-                {/* Images */}
-                {msg.media_paths?.length > 0 && (
-                  <div className={['flex flex-col gap-1 mb-1', msg.media_paths.length > 1 ? 'grid grid-cols-2' : ''].join(' ')}>
-                    {msg.media_paths.map((path, idx) => (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        key={idx}
-                        src={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/previews/${path}`}
-                        alt=""
-                        className="rounded-xl max-h-64 w-full object-cover cursor-pointer"
-                        onClick={() => window.open(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/previews/${path}`, '_blank')}
-                      />
-                    ))}
-                  </div>
-                )}
+                {/* Images — horizontal carousel; locked overlay for unpaid PPV. */}
+                {msg.media_urls.length > 0 && (() => {
+                  const isPpv  = msg.price_usd != null
+                  const locked = isPpv && !msg.purchased
+                  return (
+                    <div className="relative w-[75vw] max-w-[300px] mb-1 rounded-xl overflow-hidden">
+                      <div
+                        className={[
+                          'flex overflow-x-auto snap-x snap-mandatory rounded-xl',
+                          '[scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+                        ].join(' ')}
+                      >
+                        {msg.media_urls.map((url, idx) => (
+                          <div key={idx} className="snap-center shrink-0 w-full">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={url}
+                              alt=""
+                              onClick={() => {
+                                if (locked) return
+                                setLightbox({ urls: msg.media_urls, index: idx })
+                              }}
+                              className={[
+                                'w-full h-64 object-cover select-none',
+                                locked ? 'blur-2xl scale-110' : 'cursor-pointer',
+                              ].join(' ')}
+                              draggable={false}
+                            />
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Slide indicators (only when more than one) */}
+                      {!locked && msg.media_urls.length > 1 && (
+                        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1">
+                          {msg.media_urls.map((_, i) => (
+                            <span key={i} className="h-1 w-1 rounded-full bg-white/70" />
+                          ))}
+                        </div>
+                      )}
+
+                      {/* PPV lock overlay */}
+                      {locked && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/30 backdrop-blur-sm">
+                          <div className="flex items-center gap-1 px-3 py-1 rounded-full bg-warning/20 text-warning text-xs font-semibold border border-warning/40">
+                            🔒 ${msg.price_usd?.toFixed(2)}
+                          </div>
+                          <button
+                            type="button"
+                            disabled={unlockLoading}
+                            onClick={() => startUnlock(msg.id, msg.price_usd ?? 0)}
+                            className="px-3 py-1.5 rounded-xl bg-accent text-white text-xs font-semibold hover:bg-accent-hover transition-colors disabled:opacity-50 shadow-[0_0_12px_rgba(224,64,122,0.35)]"
+                          >
+                            {unlockLoading && unlocking?.messageId === msg.id
+                              ? 'Loading…'
+                              : `Unlock · $${msg.price_usd?.toFixed(2)}`}
+                          </button>
+                          {msg.media_urls.length > 1 && (
+                            <p className="text-[11px] text-white/80">
+                              {msg.media_urls.length} photos
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
 
                 {/* Bubble row — bubble + hover actions */}
                 <div className={['flex items-center gap-1.5', isMe ? 'flex-row-reverse' : 'flex-row'].join(' ')}>
@@ -753,24 +987,45 @@ export function ChatClient({
         )}
 
         {pendingImages.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-2">
-            {pendingImages.map((p, i) => (
-              <div
-                key={i}
-                className="relative h-20 w-20 rounded-xl overflow-hidden bg-bg-elevated border border-border group"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={p.localUrl} alt="" className="h-full w-full object-cover" />
-                <button
-                  type="button"
-                  onClick={() => removePendingImage(i)}
-                  className="absolute top-1 right-1 h-5 w-5 rounded-full bg-black/70 text-white text-xs flex items-center justify-center hover:bg-black"
-                  aria-label="Remove image"
+          <div className="flex flex-col gap-2 mb-2">
+            <div className="flex flex-wrap gap-2">
+              {pendingImages.map((p, i) => (
+                <div
+                  key={i}
+                  className="relative h-20 w-20 rounded-xl overflow-hidden bg-bg-elevated border border-border group"
                 >
-                  ×
-                </button>
-              </div>
-            ))}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={p.localUrl} alt="" className="h-full w-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => removePendingImage(i)}
+                    className="absolute top-1 right-1 h-5 w-5 rounded-full bg-black/70 text-white text-xs flex items-center justify-center hover:bg-black"
+                    aria-label="Remove image"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {/* PPV price input — creator only, optional. Empty = free media. */}
+            <label className="flex items-center gap-2 text-xs text-text-secondary">
+              <span className="font-medium">Price (optional)</span>
+              <span className="relative">
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-text-muted">$</span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="1"
+                  step="0.01"
+                  placeholder="Free"
+                  value={pendingPriceRaw}
+                  onChange={(e) => setPendingPriceRaw(e.target.value)}
+                  className="w-24 pl-5 pr-2 py-1 rounded-lg border border-border bg-bg-elevated text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors"
+                />
+              </span>
+              <span className="text-text-muted">— charge to unlock</span>
+            </label>
           </div>
         )}
 
@@ -887,6 +1142,32 @@ export function ChatClient({
           </div>
         </div>
       </div>
+    )}
+
+    {/* In-app lightbox for chat media */}
+    {lightbox && (
+      <ChatLightbox
+        urls={lightbox.urls}
+        initialIndex={lightbox.index}
+        onClose={() => setLightbox(null)}
+      />
+    )}
+
+    {/* Stripe payment modal for unlocking PPV chat media */}
+    {unlockSecret && unlocking && (
+      <PaymentModal
+        clientSecret={unlockSecret}
+        title="Unlock this content"
+        subtitle={`Pay $${unlocking.priceUsd.toFixed(2)} to view this message.`}
+        label={`Pay $${unlocking.priceUsd.toFixed(2)}`}
+        onSuccess={() => {
+          setUnlockSecret(null)
+          setUnlocking(null)
+          // Server-rendered URLs will reflect the new purchase after refresh.
+          router.refresh()
+        }}
+        onClose={() => { setUnlockSecret(null); setUnlocking(null) }}
+      />
     )}
 
     {blockModal && otherProfile && (

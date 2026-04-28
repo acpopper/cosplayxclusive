@@ -140,6 +140,7 @@ export interface FeedPost {
   hasLiked: boolean
   commentCount: number
   totalTipped: number
+  hasSaved: boolean
 }
 
 export interface FeedComment {

@@ -1,8 +1,26 @@
+import type { Metadata } from 'next'
 import { createClient } from '@/lib/supabase/server'
 import { Nav } from '@/components/nav'
 import { Footer } from '@/components/footer'
 import { CreatorsFilter } from './creators-filter'
 import type { Profile } from '@/lib/types'
+
+export const metadata: Metadata = {
+  title:       'Discover Creators',
+  description: 'Browse cosplay creators on CosplayXclusive — find new favorites and subscribe to exclusive content.',
+  alternates:  { canonical: '/explore' },
+  openGraph: {
+    title:       'Discover Creators — CosplayXclusive',
+    description: 'Browse cosplay creators on CosplayXclusive.',
+    url:         '/explore',
+    type:        'website',
+  },
+  twitter: {
+    card:        'summary_large_image',
+    title:       'Discover Creators — CosplayXclusive',
+    description: 'Browse cosplay creators on CosplayXclusive.',
+  },
+}
 
 export default async function ExplorePage() {
   const supabase = await createClient()

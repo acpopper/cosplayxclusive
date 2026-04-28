@@ -265,6 +265,34 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        if (meta.type === 'message_ppv' && meta.fan_id && meta.message_id && meta.creator_id) {
+          const { data: message } = await supabase
+            .from('messages').select('price_usd').eq('id', meta.message_id).single()
+
+          await supabase.from('message_purchases').upsert({
+            fan_id:                   meta.fan_id,
+            message_id:               meta.message_id,
+            stripe_payment_intent_id: pi.id,
+            amount_usd:               message?.price_usd ?? amountUsd,
+          }, { onConflict: 'fan_id,message_id', ignoreDuplicates: true })
+
+          await supabase.from('transactions').insert({
+            creator_id:      meta.creator_id,
+            fan_id:          meta.fan_id,
+            type:            'ppv',
+            amount_usd:      amountUsd * 0.80,
+            stripe_event_id: event.id,
+          })
+
+          const phMsg = getPostHogClient()
+          phMsg.capture({
+            distinctId: meta.fan_id,
+            event:      'message_ppv_purchased',
+            properties: { message_id: meta.message_id, amount_usd: message?.price_usd ?? amountUsd, creator_id: meta.creator_id },
+          })
+          await phMsg.shutdown()
+        }
+
         break
       }
 

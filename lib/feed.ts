@@ -88,7 +88,7 @@ export async function getFeedPage(
   const postIds = posts.map((p: { id: string }) => p.id)
 
   // 3. Fetch aggregates in parallel
-  const [likesRes, userLikesRes, commentCountsRes, tipsRes, purchasesRes] = await Promise.all([
+  const [likesRes, userLikesRes, commentCountsRes, tipsRes, purchasesRes, savesRes] = await Promise.all([
     // Total likes per post
     supabase
       .from('post_likes')
@@ -120,6 +120,13 @@ export async function getFeedPage(
       .select('post_id')
       .eq('fan_id', fanId)
       .in('post_id', postIds),
+
+    // Which posts the viewer has saved
+    supabase
+      .from('post_saves')
+      .select('post_id')
+      .in('post_id', postIds)
+      .eq('user_id', fanId),
   ])
 
   // Build lookup maps
@@ -141,6 +148,8 @@ export async function getFeedPage(
   }
 
   const purchasedSet = new Set((purchasesRes.data ?? []).map((r: { post_id: string }) => r.post_id))
+
+  const savedSet = new Set((savesRes.data ?? []).map((r: { post_id: string }) => r.post_id))
 
   type RawPost = {
     id: string
@@ -204,6 +213,7 @@ export async function getFeedPage(
         hasLiked: likedSet.has(post.id),
         commentCount: commentCountMap[post.id] ?? 0,
         totalTipped: tipsMap[post.id] ?? 0,
+        hasSaved: savedSet.has(post.id),
       }
     })
   )

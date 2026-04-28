@@ -1,3 +1,4 @@
+import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { hasPostAccess, isActiveSubscriber } from '@/lib/access'
@@ -5,6 +6,50 @@ import { CreatorProfileClient } from './profile-client'
 import { RestrictedProfile } from './restricted-profile'
 import { Footer } from '@/components/footer'
 import type { Post, Subscription, PostPurchase, Profile } from '@/lib/types'
+
+export async function generateMetadata(
+  props: PageProps<'/[username]'>,
+): Promise<Metadata> {
+  const { username } = await props.params
+  const supabase = await createClient()
+
+  const { data: creator } = await supabase
+    .from('profiles')
+    .select('username, display_name, bio, avatar_url, banner_url, fandom_tags, creator_status')
+    .eq('username', username.toLowerCase())
+    .single()
+
+  if (!creator || creator.creator_status !== 'approved') {
+    return { title: 'Creator not found', robots: { index: false } }
+  }
+
+  const name        = creator.display_name || creator.username
+  const tagSuffix   = (creator.fandom_tags ?? []).slice(0, 3).join(', ')
+  const description = creator.bio
+    ? creator.bio.slice(0, 160)
+    : `Subscribe to ${name} on CosplayXclusive${tagSuffix ? ` — ${tagSuffix}` : ''}.`
+  const url         = `/${creator.username}`
+  const image       = creator.banner_url || creator.avatar_url || undefined
+
+  return {
+    title:       `${name} (@${creator.username})`,
+    description,
+    alternates:  { canonical: url },
+    openGraph: {
+      title:       `${name} (@${creator.username})`,
+      description,
+      url,
+      type:        'profile',
+      images:      image ? [{ url: image }] : undefined,
+    },
+    twitter: {
+      card:        'summary_large_image',
+      title:       `${name} (@${creator.username})`,
+      description,
+      images:      image ? [image] : undefined,
+    },
+  }
+}
 
 export default async function CreatorProfilePage(props: PageProps<'/[username]'>) {
   const { username } = await props.params

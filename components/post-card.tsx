@@ -139,15 +139,22 @@ export function PostCard({
   const [hasLiked, setHasLiked]       = useState(false)
   const [likeLoading, setLikeLoading] = useState(false)
 
+  const [hasSaved, setHasSaved]       = useState(false)
+  const [saveLoading, setSaveLoading] = useState(false)
+
   const menuRef   = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  // Lazy-fetch like state once on mount (only when logged in)
+  // Lazy-fetch like + save state on mount (only when logged in)
   useEffect(() => {
     if (!viewerId) return
     fetch(`/api/posts/like?postId=${post.id}`)
       .then((r) => r.ok ? r.json() : null)
       .then((d) => { if (d) { setLikeCount(d.likeCount); setHasLiked(d.hasLiked) } })
+      .catch(() => {/* ignore */})
+    fetch(`/api/posts/save?postId=${post.id}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d) setHasSaved(!!d.saved) })
       .catch(() => {/* ignore */})
   }, [post.id, viewerId])
 
@@ -168,6 +175,25 @@ export function PostCard({
       setLikeCount((n) => wasLiked ? n + 1 : Math.max(0, n - 1))
     } finally {
       setLikeLoading(false)
+    }
+  }
+
+  async function handleSave() {
+    if (!viewerId || saveLoading) { if (!viewerId) router.push('/login'); return }
+    const wasSaved = hasSaved
+    setHasSaved(!wasSaved)
+    setSaveLoading(true)
+    try {
+      const res = await fetch('/api/posts/save', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ postId: post.id, action: wasSaved ? 'unsave' : 'save' }),
+      })
+      if (!res.ok) throw new Error('save failed')
+    } catch {
+      setHasSaved(wasSaved)
+    } finally {
+      setSaveLoading(false)
     }
   }
 
@@ -432,7 +458,7 @@ export function PostCard({
               {hasAccess && post.access_type !== 'free' && (
                 <Badge variant="success" className="text-xs">Unlocked</Badge>
               )}
-              {viewerId && viewerId !== creator.id && (
+              {viewerId && viewerId !== creator.id && hasAccess && (
                 <button
                   onClick={handleLike}
                   disabled={likeLoading}
@@ -449,7 +475,7 @@ export function PostCard({
                   {likeCount > 0 && <span className="text-xs">{likeCount}</span>}
                 </button>
               )}
-              {viewerId && (
+              {viewerId && hasAccess && (
                 <button
                   onClick={() => setShowComments((v) => !v)}
                   className="flex items-center gap-1 text-text-muted hover:text-text-primary transition-colors"
@@ -457,6 +483,23 @@ export function PostCard({
                 >
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.75} viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                </button>
+              )}
+              {viewerId && hasAccess && (
+                <button
+                  onClick={handleSave}
+                  disabled={saveLoading}
+                  className={[
+                    'flex items-center transition-colors',
+                    hasSaved ? 'text-accent' : 'text-text-muted hover:text-accent',
+                    saveLoading ? 'opacity-60 cursor-not-allowed' : '',
+                  ].join(' ')}
+                  aria-label={hasSaved ? 'Remove from collections' : 'Save to collections'}
+                  aria-pressed={hasSaved}
+                >
+                  <svg className="h-4 w-4" fill={hasSaved ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={1.75} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
                   </svg>
                 </button>
               )}

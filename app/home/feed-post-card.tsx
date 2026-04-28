@@ -414,6 +414,9 @@ export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPost
   const [showComments, setShowComments] = useState(false)
   const [commentCount, setCommentCount] = useState(post.commentCount)
 
+  const [hasSaved, setHasSaved]       = useState(post.hasSaved)
+  const [saveLoading, setSaveLoading] = useState(false)
+
   const [totalTipped, setTotalTipped] = useState(post.totalTipped)
   const [showTip, setShowTip]         = useState(false)
 
@@ -469,6 +472,26 @@ export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPost
       setLikeCount(n => wasLiked ? n + 1 : Math.max(0, n - 1))
     } finally {
       setLikeLoading(false)
+    }
+  }
+
+  async function handleSave() {
+    if (saveLoading) return
+    const wasSaved = hasSaved
+    setHasSaved(!wasSaved)
+    setSaveLoading(true)
+    posthog.capture(wasSaved ? 'post_unsaved' : 'post_saved', { post_id: post.id, creator_id: post.creator_id })
+    try {
+      const res = await fetch('/api/posts/save', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ postId: post.id, action: wasSaved ? 'unsave' : 'save' }),
+      })
+      if (!res.ok) throw new Error('save failed')
+    } catch {
+      setHasSaved(wasSaved)
+    } finally {
+      setSaveLoading(false)
     }
   }
 
@@ -635,6 +658,8 @@ export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPost
         ) : null}
 
         {/* ── Action bar ─────────────────────────────────────────────────────── */}
+        {/* Hidden for locked posts: viewer must unlock (subscribe / pay / etc.) before interacting. */}
+        {post.hasAccess && (
         <div className="px-4 py-3 flex items-center gap-4">
           {/* Like */}
           <button onClick={handleLike} disabled={likeLoading || isOwnPost}
@@ -659,6 +684,29 @@ export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPost
             <span className="text-sm font-medium">{commentCount > 0 ? commentCount : ''}</span>
           </button>
 
+          {/* Save / bookmark */}
+          <button
+            onClick={handleSave}
+            disabled={saveLoading}
+            className={[
+              'flex items-center transition-colors',
+              hasSaved ? 'text-accent' : 'text-text-muted hover:text-accent',
+              saveLoading ? 'opacity-60 cursor-not-allowed' : '',
+            ].join(' ')}
+            aria-label={hasSaved ? 'Remove from collections' : 'Save to collections'}
+            aria-pressed={hasSaved}
+          >
+            <svg
+              className="h-5 w-5"
+              fill={hasSaved ? 'currentColor' : 'none'}
+              stroke="currentColor"
+              strokeWidth={1.75}
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+            </svg>
+          </button>
+
           {/* Tip */}
           {!isOwnPost && (
             <button onClick={() => setShowTip(true)} className="flex items-center gap-1.5 text-text-muted hover:text-yellow-400 transition-colors" aria-label="Send tip">
@@ -669,6 +717,7 @@ export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPost
             </button>
           )}
         </div>
+        )}
 
         {/* ── Comments ───────────────────────────────────────────────────────── */}
         {showComments && (

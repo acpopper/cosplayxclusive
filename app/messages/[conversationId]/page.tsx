@@ -32,7 +32,7 @@ export default async function ChatPage(props: PageProps<'/messages/[conversation
   // Fetch messages
   const { data: rawMessages } = await supabase
     .from('messages')
-    .select('id, sender_id, body, media_paths, reply_to_id, created_at')
+    .select('id, sender_id, body, media_paths, media_originals, price_usd, reply_to_id, created_at')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: true })
     .limit(200)
@@ -61,11 +61,58 @@ export default async function ChatPage(props: PageProps<'/messages/[conversation
     sender_id: string
     body: string
     media_paths: string[] | null
+    media_originals: string[] | null
+    price_usd: number | null
     reply_to_id: string | null
     created_at: string
   }
   const rawList = (rawMessages ?? []) as RawMessage[]
   const messageIds = rawList.map((m) => m.id)
+
+  // Which PPV messages has the viewer already paid for?
+  const ppvIds = rawList.filter((m) => m.price_usd != null).map((m) => m.id)
+  const purchasedSet = new Set<string>()
+  if (ppvIds.length > 0) {
+    const { data: purchases } = await supabase
+      .from('message_purchases')
+      .select('message_id')
+      .eq('fan_id', user.id)
+      .in('message_id', ppvIds)
+    for (const p of (purchases ?? []) as Array<{ message_id: string }>) {
+      purchasedSet.add(p.message_id)
+    }
+  }
+
+  // For PPV messages where viewer has access (sender or purchased), pre-sign
+  // originals in one batch per message. For free messages, build public preview URLs.
+  const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
+  function publicPreviewUrl(path: string): string {
+    return `${SUPABASE_URL}/storage/v1/object/public/previews/${path}`
+  }
+  const mediaUrlMap = new Map<string, string[]>()
+  await Promise.all(
+    rawList.map(async (m) => {
+      const paths = m.media_paths ?? []
+      if (paths.length === 0) { mediaUrlMap.set(m.id, []); return }
+
+      const isPpv     = m.price_usd != null
+      const isSender  = m.sender_id === user.id
+      const purchased = purchasedSet.has(m.id)
+
+      if (isPpv && (isSender || purchased) && (m.media_originals?.length ?? 0) > 0) {
+        const { data: signed } = await supabase.storage
+          .from('originals')
+          .createSignedUrls(m.media_originals!, 3600)
+        const urls = (signed ?? [])
+          .map((s: { signedUrl: string }) => s.signedUrl)
+          .filter(Boolean)
+        mediaUrlMap.set(m.id, urls)
+      } else {
+        // Free media OR locked PPV — use public preview URLs (blurred for PPV).
+        mediaUrlMap.set(m.id, paths.map(publicPreviewUrl))
+      }
+    }),
+  )
 
   // Resolve quoted reply targets — may include older messages outside the 200-row window.
   const replyTargetIds = Array.from(
@@ -123,11 +170,16 @@ export default async function ChatPage(props: PageProps<'/messages/[conversation
         }
       }
     }
+    const isPpv     = msg.price_usd != null
+    const purchased = isPpv && (msg.sender_id === user.id || purchasedSet.has(msg.id))
     return {
       id:           msg.id,
       sender_id:    msg.sender_id,
       body:         msg.body,
       media_paths:  msg.media_paths ?? [],
+      media_urls:   mediaUrlMap.get(msg.id) ?? [],
+      price_usd:    msg.price_usd,
+      purchased,
       reply_to_id:  msg.reply_to_id,
       created_at:   msg.created_at,
       sender:       profileMap[msg.sender_id] ?? null,
