@@ -282,6 +282,26 @@ export default async function SettingsPage() {
             />
           </section>
 
+          {/* Email notifications */}
+          <section className="bg-bg-card border border-border rounded-2xl p-5">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-text-primary mb-1">
+                  Email notifications
+                </h2>
+                <p className="text-xs text-text-muted">
+                  Choose which activity, summary, and marketing emails you receive.
+                </p>
+              </div>
+              <Link
+                href="/settings/notifications"
+                className="inline-flex items-center gap-1.5 h-9 px-4 rounded-lg font-medium border border-border bg-bg-elevated text-text-secondary hover:text-text-primary transition-colors text-sm flex-shrink-0"
+              >
+                Manage →
+              </Link>
+            </div>
+          </section>
+
           {/* Blocked accounts */}
           <section className="bg-bg-card border border-border rounded-2xl p-5">
             <h2 className="text-sm font-semibold text-text-primary mb-1">

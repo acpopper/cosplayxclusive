@@ -49,9 +49,9 @@ export async function POST(request: NextRequest) {
 
     const username = creatorProfile?.username ?? creatorUser.email
     if (action === 'approve') {
-      await sendCreatorApproved(creatorUser.email, username)
+      await sendCreatorApproved(creatorId, creatorUser.email, username)
     } else {
-      await sendCreatorRejected(creatorUser.email, username)
+      await sendCreatorRejected(creatorId, creatorUser.email, username)
     }
   }
 

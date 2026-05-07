@@ -100,6 +100,7 @@ export async function POST(request: NextRequest) {
       const { data: { user: creatorUser } } = await service.auth.admin.getUserById(creatorId)
       if (creatorUser?.email) {
         await sendNewSubscriber(
+          creatorId,
           creatorUser.email,
           creator.username,
           fanProfile.display_name || fanProfile.username,

@@ -1,8 +1,150 @@
 import { Resend } from 'resend'
+import { createServiceClient } from '@/lib/supabase/server'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
 const FROM   = process.env.RESEND_FROM ?? 'CosplayXclusive <noreply@cosplayxclusive.com>'
 const APP    = process.env.NEXT_PUBLIC_APP_URL ?? 'https://cosplayxclusive.com'
+
+// ─── Email categories ────────────────────────────────────────────────────────
+// `required: true` — always sent (security / legal / money safety). Not in DB.
+// `required: false` — backed by a column in `email_preferences`. The DB column
+// name MUST match the key. `default` here mirrors the column default so a user
+// with no row sees the same behavior as one with a freshly-defaulted row.
+
+export type EmailCategory =
+  | 'account_security'
+  | 'payment_receipts'
+  | 'payment_alerts'
+  | 'creator_activity'
+  | 'creator_milestones'
+  | 'creator_summary_monthly'
+  | 'fan_activity'
+  | 'fan_summary_monthly'
+  | 'direct_messages'
+  | 'product_updates'
+  | 'inactive_nudge'
+
+interface CategoryMeta {
+  required:    boolean
+  default:     boolean
+  label:       string
+  description: string
+}
+
+export const EMAIL_CATEGORIES: Record<EmailCategory, CategoryMeta> = {
+  account_security: {
+    required:    true,
+    default:     true,
+    label:       'Account & security',
+    description: 'Email verification, password changes, sign-ins from new devices.',
+  },
+  payment_receipts: {
+    required:    true,
+    default:     true,
+    label:       'Payment receipts',
+    description: 'Confirmation when you subscribe, unlock content, send a tip, or get a refund.',
+  },
+  payment_alerts: {
+    required:    true,
+    default:     true,
+    label:       'Payment problems',
+    description: 'Failed charges, expiring cards, payout failures.',
+  },
+  creator_activity: {
+    required:    false,
+    default:     true,
+    label:       'Creator activity',
+    description: 'New subscribers, comments, tips, and PPV purchases on your content.',
+  },
+  creator_milestones: {
+    required:    false,
+    default:     true,
+    label:       'Creator milestones',
+    description: 'Subscriber-count and revenue milestones worth celebrating.',
+  },
+  creator_summary_monthly: {
+    required:    false,
+    default:     true,
+    label:       'Monthly creator summary',
+    description: 'Once-a-month recap of your subscribers, posts, and earnings.',
+  },
+  fan_activity: {
+    required:    false,
+    default:     true,
+    label:       'New posts from creators you follow',
+    description: 'Daily-digest notifications about creators you subscribe to.',
+  },
+  fan_summary_monthly: {
+    required:    false,
+    default:     true,
+    label:       'Monthly fan summary',
+    description: 'Once-a-month digest of new content from creators you follow.',
+  },
+  direct_messages: {
+    required:    false,
+    default:     true,
+    label:       'Missed direct messages',
+    description: 'When you receive a DM and aren’t online to read it.',
+  },
+  product_updates: {
+    required:    false,
+    default:     false,
+    label:       'Product news & announcements',
+    description: 'New platform features, promotions, and announcements.',
+  },
+  inactive_nudge: {
+    required:    false,
+    default:     false,
+    label:       'Re-engagement reminders',
+    description: 'Occasional nudges if you haven’t logged in for a while.',
+  },
+}
+
+export const TOGGLEABLE_CATEGORIES = (Object.entries(EMAIL_CATEGORIES) as Array<[EmailCategory, CategoryMeta]>)
+  .filter(([, meta]) => !meta.required)
+  .map(([key]) => key)
+
+export type EmailPreferencesRow = {
+  [K in (typeof TOGGLEABLE_CATEGORIES)[number]]: boolean
+}
+
+/**
+ * Returns true if the email should be delivered. Checks (in order):
+ *   1. Suppression list (bounces / complaints / manual blocks) — always wins.
+ *   2. Per-user category preference, defaulting to the category's default
+ *      when no row exists. Required categories skip this step.
+ *
+ * `userId` may be null for pre-account flows (e.g. sign-up verification);
+ * in that case we only consult the suppression list.
+ */
+async function shouldSend(
+  toEmail:  string,
+  userId:   string | null,
+  category: EmailCategory,
+): Promise<boolean> {
+  const lower = toEmail.toLowerCase()
+  const service = createServiceClient()
+
+  const { data: suppressed } = await service
+    .from('email_suppressions')
+    .select('email')
+    .eq('email', lower)
+    .maybeSingle()
+
+  if (suppressed) return false
+  if (EMAIL_CATEGORIES[category].required) return true
+  if (!userId) return true
+
+  const { data: prefs } = await service
+    .from('email_preferences')
+    .select(category)
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (!prefs) return EMAIL_CATEGORIES[category].default
+  const value = (prefs as Record<string, boolean | null>)[category]
+  return value ?? EMAIL_CATEGORIES[category].default
+}
 
 // ─── shared layout ───────────────────────────────────────────────────────────
 function layout(title: string, body: string): string {
@@ -60,7 +202,8 @@ function h(text: string): string {
 // ─── email senders ────────────────────────────────────────────────────────────
 
 /** Sent when admin approves a creator application. */
-export async function sendCreatorApproved(toEmail: string, username: string) {
+export async function sendCreatorApproved(userId: string, toEmail: string, username: string) {
+  if (!(await shouldSend(toEmail, userId, 'account_security'))) return
   await resend.emails.send({
     from:    FROM,
     to:      toEmail,
@@ -75,7 +218,8 @@ export async function sendCreatorApproved(toEmail: string, username: string) {
 }
 
 /** Sent when admin rejects a creator application. */
-export async function sendCreatorRejected(toEmail: string, username: string) {
+export async function sendCreatorRejected(userId: string, toEmail: string, username: string) {
+  if (!(await shouldSend(toEmail, userId, 'account_security'))) return
   await resend.emails.send({
     from:    FROM,
     to:      toEmail,
@@ -91,11 +235,13 @@ export async function sendCreatorRejected(toEmail: string, username: string) {
 
 /** Sent to a creator when they get a new subscriber. */
 export async function sendNewSubscriber(
+  userId:          string,
   toEmail:         string,
   creatorUsername: string,
   fanName:         string,
   isPaid:          boolean,
 ) {
+  if (!(await shouldSend(toEmail, userId, 'creator_activity'))) return
   const subType = isPaid ? 'paid subscriber' : 'free follower'
   await resend.emails.send({
     from:    FROM,
@@ -112,12 +258,14 @@ export async function sendNewSubscriber(
 
 /** Sent to a creator when their post gets its first comment (then grouped). */
 export async function sendNewComment(
+  userId:          string,
   toEmail:         string,
   creatorUsername: string,
   commenterName:   string,
   postCaption:     string | null,
   commentBody:     string,
 ) {
+  if (!(await shouldSend(toEmail, userId, 'creator_activity'))) return
   const postRef = postCaption ? `"${postCaption.slice(0, 60)}${postCaption.length > 60 ? '…' : ''}"` : 'your post'
   await resend.emails.send({
     from:    FROM,
@@ -136,12 +284,14 @@ export async function sendNewComment(
 
 /** Sent to a creator when their post receives a tip. */
 export async function sendNewTip(
+  userId:          string,
   toEmail:         string,
   creatorUsername: string,
   tipperName:      string,
   amount:          number,
   postCaption:     string | null,
 ) {
+  if (!(await shouldSend(toEmail, userId, 'creator_activity'))) return
   const postRef = postCaption ? `"${postCaption.slice(0, 60)}${postCaption.length > 60 ? '…' : ''}"` : 'your post'
   await resend.emails.send({
     from:    FROM,

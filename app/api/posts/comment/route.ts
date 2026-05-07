@@ -123,6 +123,7 @@ export async function POST(request: NextRequest) {
         .eq('id', post.creator_id)
         .single()
       await sendNewComment(
+        post.creator_id,
         creatorUser.email,
         creatorProfile?.username ?? '',
         actor.display_name || actor.username,

@@ -116,6 +116,7 @@ export async function POST(request: NextRequest) {
                 const { data: creatorProfile } = await supabase
                   .from('profiles').select('username').eq('id', post.creator_id).single()
                 await sendNewTip(
+                  post.creator_id,
                   creatorUser.email,
                   creatorProfile?.username ?? '',
                   fan.display_name || fan.username,
@@ -232,6 +233,7 @@ export async function POST(request: NextRequest) {
                 const { data: creatorProfile } = await supabase
                   .from('profiles').select('username').eq('id', post.creator_id).single()
                 await sendNewTip(
+                  post.creator_id,
                   creatorUser.email,
                   creatorProfile?.username ?? '',
                   fan.display_name || fan.username,
@@ -395,6 +397,7 @@ export async function POST(request: NextRequest) {
               const { data: creatorProfile } = await supabase
                 .from('profiles').select('username').eq('id', meta.creator_id).single()
               await sendNewSubscriber(
+                meta.creator_id,
                 creatorUser.email,
                 creatorProfile?.username ?? '',
                 fan.display_name || fan.username,
