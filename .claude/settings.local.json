@@ -23,7 +23,8 @@
       "mcp__supabase__list_tables",
       "Read(//c/Users/alanp/Downloads/stripe_1.40.9_windows_x86_64/**)",
       "Read(//c/Users/alanp/**)",
-      "PowerShell($currentUserPath = [Environment]::GetEnvironmentVariable\\('Path', 'User'\\); Write-Output \"CURRENT_USER_PATH:\"; Write-Output $currentUserPath; Write-Output \"---\"; Write-Output \"BIN_EXISTS: $\\(Test-Path 'C:\\\\Users\\\\alanp\\\\bin'\\)\")"
+      "PowerShell($currentUserPath = [Environment]::GetEnvironmentVariable\\('Path', 'User'\\); Write-Output \"CURRENT_USER_PATH:\"; Write-Output $currentUserPath; Write-Output \"---\"; Write-Output \"BIN_EXISTS: $\\(Test-Path 'C:\\\\Users\\\\alanp\\\\bin'\\)\")",
+      "Bash(npm run *)"
     ]
   }
 }

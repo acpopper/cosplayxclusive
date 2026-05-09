@@ -6,7 +6,7 @@ import {
   TOGGLEABLE_CATEGORIES,
   type EmailCategory,
   type EmailPreferencesRow,
-} from '@/lib/email'
+} from '@/lib/email-categories'
 
 interface NotificationsFormProps {
   initial: EmailPreferencesRow
