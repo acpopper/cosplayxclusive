@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
-import { getStripe } from '@/lib/stripe'
+import { getStripe, getPlatformFeePercent } from '@/lib/stripe'
 import { maybeSendAutoMessage, isReturningSubscriber } from '@/lib/auto-message'
-import { sendNewSubscriber } from '@/lib/email'
+import { sendNewFreeFollower } from '@/lib/email'
 
 export async function POST(request: NextRequest) {
   try {
@@ -19,7 +19,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // Get fan profile (for Stripe customer)
     const { data: fanProfile } = await supabase
       .from('profiles')
       .select('*')
@@ -30,7 +29,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Profile not found' }, { status: 404 })
     }
 
-    // Get creator profile (for price and connected account)
     const { data: creator } = await supabase
       .from('profiles')
       .select('*')
@@ -46,7 +44,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Creator has not set a subscription price' }, { status: 400 })
     }
 
-    // Check if already subscribed
     const { data: existingSub } = await supabase
       .from('subscriptions')
       .select('*')
@@ -65,8 +62,6 @@ export async function POST(request: NextRequest) {
     // Free creator — grant access directly without Stripe
     if (creator.subscription_price_usd === 0) {
       const service = createServiceClient()
-
-      // Detect returning subscriber BEFORE inserting new active record
       const isReturn = await isReturningSubscriber(service, user.id, creatorId)
 
       const { error: insertError } = await service
@@ -80,7 +75,6 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: insertError.message }, { status: 500 })
       }
 
-      // Notify creator of their new follower
       await service.from('notifications').insert({
         user_id: creatorId,
         type: 'new_subscriber',
@@ -93,19 +87,24 @@ export async function POST(request: NextRequest) {
         },
       })
 
-      // Send creator's auto-message (if configured)
       await maybeSendAutoMessage(service, user.id, creatorId, isReturn)
 
-      // Email creator about new free follower
       const { data: { user: creatorUser } } = await service.auth.admin.getUserById(creatorId)
       if (creatorUser?.email) {
-        await sendNewSubscriber(
-          creatorId,
-          creatorUser.email,
-          creator.username,
-          fanProfile.display_name || fanProfile.username,
-          false,
-        )
+        const { count: followerCount } = await service
+          .from('subscriptions')
+          .select('*', { count: 'exact', head: true })
+          .eq('creator_id', creatorId)
+          .eq('status', 'active')
+        await sendNewFreeFollower({
+          creatorUserId:      creatorId,
+          creatorEmail:       creatorUser.email,
+          creatorDisplayName: creator.display_name ?? null,
+          creatorUsername:    creator.username,
+          fanUsername:        fanProfile.username,
+          fanDisplayName:     fanProfile.display_name ?? null,
+          totalFollowers:     followerCount ?? 1,
+        })
       }
 
       return NextResponse.json({ url: successUrl })
@@ -115,26 +114,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Creator has not set up payouts yet' }, { status: 400 })
     }
 
-    // Get or create Stripe customer for fan
-    let stripeCustomerId = fanProfile.stripe_customer_id
-    if (!stripeCustomerId) {
-      const customer = await getStripe().customers.create({
-        email: user.email,
-        metadata: { supabase_user_id: user.id },
-      })
-      stripeCustomerId = customer.id
-      await supabase
-        .from('profiles')
-        .update({ stripe_customer_id: stripeCustomerId })
-        .eq('id', user.id)
-    }
-
-    // Platform fee: 20%
     const priceInCents = Math.round(creator.subscription_price_usd * 100)
-    const applicationFeePercent = 20
+    const applicationFeePercent = getPlatformFeePercent(creator.platform_fee_percent)
 
-    // Create a price on the creator's connected account for this subscription
-    // We create the price dynamically (simpler for MVP than storing prices)
+    // Direct-charge subscription on the creator's connected account.
+    // Price + customer both live on the connected account; we collect an
+    // application fee per period.
     const price = await getStripe().prices.create(
       {
         unit_amount: priceInCents,
@@ -150,7 +135,7 @@ export async function POST(request: NextRequest) {
     const session = await getStripe().checkout.sessions.create(
       {
         mode: 'subscription',
-        customer: stripeCustomerId,
+        customer_email: user.email,
         line_items: [{ price: price.id, quantity: 1 }],
         subscription_data: {
           application_fee_percent: applicationFeePercent,

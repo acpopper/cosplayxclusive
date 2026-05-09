@@ -26,10 +26,10 @@ export function AgeGate() {
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90 backdrop-blur-md p-4">
       <div className="w-full max-w-sm rounded-2xl border border-border bg-bg-card p-8 text-center shadow-2xl">
         <div className="mb-4 text-4xl">✦</div>
-        <h2 className="mb-2 text-xl font-bold text-text-primary">Age Verification</h2>
+        <h2 className="mb-2 text-xl font-bold text-text-primary">Welcome to CosplayXclusive</h2>
         <p className="mb-6 text-sm text-text-secondary leading-relaxed">
-          This website contains content intended for adults only. By entering, you confirm that
-          you are 18 years of age or older and consent to viewing adult-oriented content.
+          You must be at least 18 years old to use CosplayXclusive. By entering, you confirm that
+          you are 18 or older and agree to our community guidelines.
         </p>
         <div className="flex flex-col gap-3">
           <button

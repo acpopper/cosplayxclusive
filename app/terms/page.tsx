@@ -83,18 +83,33 @@ export default async function TermsPage() {
 
           <section>
             <h2 className="text-xl font-semibold text-text-primary mb-3">5. Prohibited Content &amp; Conduct</h2>
-            <p>You may not post, upload, or distribute content that:</p>
+            <p>
+              <strong>CosplayXclusive does not permit sexually explicit content, pornography, or
+              adult entertainment of any kind.</strong> The Platform is intended for cosplay
+              photography, behind-the-scenes work, and related creative content. Content that
+              violates this policy will be removed and the responsible account may be suspended
+              or permanently terminated.
+            </p>
+            <p className="mt-2">You may not post, upload, or distribute content that:</p>
             <ul className="list-disc pl-5 mt-2 space-y-1 text-sm">
+              <li>Is sexually explicit, pornographic, or otherwise constitutes adult entertainment.</li>
               <li>Depicts or promotes minors in a sexual or exploitative manner (zero tolerance; will be reported to NCMEC and law enforcement).</li>
-              <li>Is non-consensual, including intimate images shared without explicit consent.</li>
+              <li>Is non-consensual, including intimate images shared without express consent.</li>
               <li>Constitutes harassment, hate speech, threats, or incites violence against any person or group.</li>
               <li>Infringes any third party&apos;s intellectual property, privacy, or publicity rights.</li>
               <li>Contains malware, spam, or deceptive content.</li>
               <li>Violates any applicable local, state, national, or international law or regulation.</li>
             </ul>
             <p className="mt-2">
-              You may not use the Platform to engage in fraud, impersonation, chargebacks abuse, or
+              You may not use the Platform to engage in fraud, impersonation, chargeback abuse, or
               unauthorized scraping of content or user data.
+            </p>
+            <p className="mt-2">
+              <strong>Moderation:</strong> All uploaded media is screened by automated tools (image
+              and video classification for nudity, sexual content, weapons, and other policy
+              violations) at the time of upload. Content that fails automated review is rejected
+              before publication. We additionally review user reports manually and may remove
+              content or suspend accounts based on that review.
             </p>
           </section>
 

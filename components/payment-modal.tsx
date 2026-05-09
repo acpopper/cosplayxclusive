@@ -1,10 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { loadStripe } from '@stripe/stripe-js'
+import { useState, useEffect, useMemo } from 'react'
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js'
-
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!)
+import { loadStripeForAccount } from '@/lib/stripe-client'
 
 const APPEARANCE = {
   theme: 'night' as const,
@@ -85,6 +83,8 @@ function CheckoutForm({
 
 interface PaymentModalProps {
   clientSecret: string
+  /** Connected account the PaymentIntent lives on (direct charges). */
+  stripeAccount?: string | null
   label: string
   title: string
   subtitle?: string
@@ -92,11 +92,13 @@ interface PaymentModalProps {
   onClose: () => void
 }
 
-export function PaymentModal({ clientSecret, label, title, subtitle, onSuccess, onClose }: PaymentModalProps) {
+export function PaymentModal({ clientSecret, stripeAccount, label, title, subtitle, onSuccess, onClose }: PaymentModalProps) {
   useEffect(() => {
     document.body.style.overflow = 'hidden'
     return () => { document.body.style.overflow = '' }
   }, [])
+
+  const stripePromise = useMemo(() => loadStripeForAccount(stripeAccount), [stripeAccount])
 
   return (
     <div

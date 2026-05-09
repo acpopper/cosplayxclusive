@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
-import { getStripe } from '@/lib/stripe'
+import { getStripe, applicationFeeCents } from '@/lib/stripe'
 
 const MIN_TIP = 1
 const MAX_TIP = 500
@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
 
     const { data: creator } = await service
       .from('profiles')
-      .select('username, display_name, stripe_account_id')
+      .select('username, display_name, stripe_account_id, platform_fee_percent')
       .eq('id', post.creator_id)
       .single()
 
@@ -38,42 +38,30 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Creator has not set up payouts' }, { status: 400 })
     }
 
-    // Get or create Stripe customer for fan (on the platform account)
-    const { data: fanProfile } = await service
-      .from('profiles')
-      .select('stripe_customer_id')
-      .eq('id', user.id)
-      .single()
-
-    let stripeCustomerId = fanProfile?.stripe_customer_id
-    if (!stripeCustomerId) {
-      const customer = await getStripe().customers.create({
-        email: user.email,
-        metadata: { supabase_user_id: user.id },
-      })
-      stripeCustomerId = customer.id
-      await service.from('profiles').update({ stripe_customer_id: stripeCustomerId }).eq('id', user.id)
-    }
-
     const priceInCents      = Math.round(amount * 100)
-    const applicationFeeAmt = Math.round(priceInCents * 0.20)
+    const applicationFeeAmt = applicationFeeCents(priceInCents, creator.platform_fee_percent)
 
-    // Destination charge: PI lives on platform, funds routed to connected account
-    const paymentIntent = await getStripe().paymentIntents.create({
-      amount:                  priceInCents,
-      currency:                'usd',
-      customer:                stripeCustomerId,
-      application_fee_amount:  applicationFeeAmt,
-      transfer_data:           { destination: creator.stripe_account_id },
-      metadata: {
-        type:       'tip',
-        fan_id:     user.id,
-        creator_id: post.creator_id,
-        post_id:    postId,
+    // Direct charge on the creator's connected account.
+    const paymentIntent = await getStripe().paymentIntents.create(
+      {
+        amount:                  priceInCents,
+        currency:                'usd',
+        application_fee_amount:  applicationFeeAmt,
+        receipt_email:           user.email,
+        metadata: {
+          type:       'tip',
+          fan_id:     user.id,
+          creator_id: post.creator_id,
+          post_id:    postId,
+        },
       },
-    })
+      { stripeAccount: creator.stripe_account_id },
+    )
 
-    return NextResponse.json({ clientSecret: paymentIntent.client_secret })
+    return NextResponse.json({
+      clientSecret:  paymentIntent.client_secret,
+      stripeAccount: creator.stripe_account_id,
+    })
   } catch (err) {
     console.error('[checkout/tip]', err)
     return NextResponse.json(

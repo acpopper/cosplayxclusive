@@ -128,6 +128,7 @@ export function PostCard({
   const router = useRouter()
   const [checkoutLoading, setCheckoutLoading] = useState(false)
   const [ppvSecret, setPpvSecret]             = useState<string | null>(null)
+  const [ppvAccount, setPpvAccount]            = useState<string | null>(null)
   const [slideIndex, setSlideIndex]           = useState(0)
   const [lightboxIndex, setLightboxIndex]     = useState<number | null>(null)
   const [menuOpen, setMenuOpen]               = useState(false)
@@ -238,7 +239,10 @@ export function PostCard({
         body: JSON.stringify({ postId: post.id }),
       })
       const data = await res.json()
-      if (data.clientSecret) setPpvSecret(data.clientSecret)
+      if (data.clientSecret) {
+        setPpvSecret(data.clientSecret)
+        setPpvAccount(data.stripeAccount ?? null)
+      }
     } finally { setCheckoutLoading(false) }
   }
 
@@ -585,11 +589,12 @@ export function PostCard({
       {ppvSecret && (
         <PaymentModal
           clientSecret={ppvSecret}
+          stripeAccount={ppvAccount}
           title="Unlock this post"
           subtitle={`Pay $${post.price_usd?.toFixed(2)} to access this exclusive content.`}
           label={`Pay $${post.price_usd?.toFixed(2)}`}
-          onSuccess={() => { setPpvSecret(null); router.refresh() }}
-          onClose={() => setPpvSecret(null)}
+          onSuccess={() => { setPpvSecret(null); setPpvAccount(null); router.refresh() }}
+          onClose={() => { setPpvSecret(null); setPpvAccount(null) }}
         />
       )}
 

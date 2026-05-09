@@ -119,17 +119,19 @@ export async function POST(request: NextRequest) {
     if (creatorUser?.email) {
       const { data: creatorProfile } = await service
         .from('profiles')
-        .select('username')
+        .select('username, display_name')
         .eq('id', post.creator_id)
         .single()
-      await sendNewComment(
-        post.creator_id,
-        creatorUser.email,
-        creatorProfile?.username ?? '',
-        actor.display_name || actor.username,
-        post.caption,
-        body.trim(),
-      )
+      await sendNewComment({
+        creatorUserId:      post.creator_id,
+        creatorEmail:       creatorUser.email,
+        creatorDisplayName: creatorProfile?.display_name ?? null,
+        creatorUsername:    creatorProfile?.username ?? '',
+        commenterUsername:  actor.username,
+        postCaption:        post.caption,
+        postId,
+        commentBody:        body.trim(),
+      })
     }
   }
 

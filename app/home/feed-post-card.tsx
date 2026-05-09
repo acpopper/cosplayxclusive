@@ -1,17 +1,15 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { loadStripe } from '@stripe/stripe-js'
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js'
+import { loadStripeForAccount } from '@/lib/stripe-client'
 import type { FeedPost, FeedComment } from '@/lib/types'
 import { Badge } from '@/components/ui/badge'
 import { ReportPostDialog } from '@/components/report-post-dialog'
 import { PostModerationModal } from '@/components/post-moderation-modal'
 import posthog from 'posthog-js'
-
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!)
 
 const STRIPE_APPEARANCE = {
   theme: 'night' as const,
@@ -29,6 +27,12 @@ const ELEMENTS_OPTS = (clientSecret: string) => ({
   clientSecret,
   appearance: STRIPE_APPEARANCE,
 })
+
+// Direct-charge PaymentIntents live on the creator's connected account, so
+// Stripe.js needs the matching `stripeAccount` to confirm them.
+function useConnectedStripe(stripeAccount: string | null) {
+  return useMemo(() => loadStripeForAccount(stripeAccount), [stripeAccount])
+}
 
 // ─── Stripe payment form (used inside tip + ppv modals) ───────────────────────
 function StripePaymentForm({
@@ -192,8 +196,10 @@ function TipModal({
   const [amount, setAmount]           = useState<number>(5)
   const [custom, setCustom]           = useState('')
   const [clientSecret, setSecret]     = useState<string | null>(null)
+  const [stripeAccount, setStripeAccount] = useState<string | null>(null)
   const [loading, setLoading]         = useState(false)
   const [error, setError]             = useState<string | null>(null)
+  const stripePromise                 = useConnectedStripe(stripeAccount)
 
   useEffect(() => {
     document.body.style.overflow = 'hidden'
@@ -218,6 +224,7 @@ function TipModal({
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Something went wrong'); return }
       setSecret(data.clientSecret)
+      setStripeAccount(data.stripeAccount ?? null)
       setStep('payment')
     } finally {
       setLoading(false)
@@ -420,8 +427,10 @@ export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPost
   const [totalTipped, setTotalTipped] = useState(post.totalTipped)
   const [showTip, setShowTip]         = useState(false)
 
-  const [ppvSecret, setPpvSecret]   = useState<string | null>(null)
-  const [ppvLoading, setPpvLoading] = useState(false)
+  const [ppvSecret, setPpvSecret]     = useState<string | null>(null)
+  const [ppvAccount, setPpvAccount]   = useState<string | null>(null)
+  const [ppvLoading, setPpvLoading]   = useState(false)
+  const ppvStripePromise              = useConnectedStripe(ppvAccount)
 
   const [menuOpen, setMenuOpen]           = useState(false)
   const [reportOpen, setReportOpen]       = useState(false)
@@ -503,7 +512,10 @@ export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPost
         body: JSON.stringify({ postId: post.id }),
       })
       const data = await res.json()
-      if (data.clientSecret) setPpvSecret(data.clientSecret)
+      if (data.clientSecret) {
+        setPpvSecret(data.clientSecret)
+        setPpvAccount(data.stripeAccount ?? null)
+      }
     } finally {
       setPpvLoading(false)
     }
@@ -748,18 +760,18 @@ export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPost
       )}
 
       {ppvSecret && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={() => setPpvSecret(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={() => { setPpvSecret(null); setPpvAccount(null) }}>
           <div className="bg-bg-card border border-border rounded-2xl w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
             <div className="p-6">
               <h2 className="text-lg font-bold text-text-primary mb-1">Unlock this post</h2>
               <p className="text-sm text-text-secondary mb-5">
                 Pay <span className="font-semibold text-accent">${post.price_usd?.toFixed(2)}</span> to unlock exclusive content from <span className="font-semibold">{post.creator.display_name || post.creator.username}</span>.
               </p>
-              <Elements stripe={stripePromise} options={{ clientSecret: ppvSecret, appearance: STRIPE_APPEARANCE }}>
+              <Elements stripe={ppvStripePromise} options={{ clientSecret: ppvSecret, appearance: STRIPE_APPEARANCE }}>
                 <StripePaymentForm
                   label={`Pay $${post.price_usd?.toFixed(2)}`}
-                  onSuccess={() => { setPpvSecret(null); router.refresh() }}
-                  onCancel={() => setPpvSecret(null)}
+                  onSuccess={() => { setPpvSecret(null); setPpvAccount(null); router.refresh() }}
+                  onCancel={() => { setPpvSecret(null); setPpvAccount(null) }}
                 />
               </Elements>
             </div>

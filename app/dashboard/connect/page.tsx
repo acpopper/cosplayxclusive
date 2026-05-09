@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { getStripe } from '@/lib/stripe'
+import { getStripe, getPlatformFeePercent } from '@/lib/stripe'
 import { ConnectButton } from './connect-button'
 
 export default async function ConnectPage() {
@@ -16,27 +16,45 @@ export default async function ConnectPage() {
 
   if (!profile) redirect('/dashboard')
 
-  // Fetch Stripe account status if connected
+  // Prefer the cached flags synced via account.updated webhook, but fall back
+  // to a live Stripe call when they haven't been populated yet.
   let accountStatus: { charges_enabled: boolean; payouts_enabled: boolean; details_submitted: boolean } | null = null
+
   if (profile.stripe_account_id) {
-    try {
-      const account = await getStripe().accounts.retrieve(profile.stripe_account_id)
+    if (
+      profile.stripe_charges_enabled !== undefined &&
+      profile.stripe_details_submitted !== undefined
+    ) {
       accountStatus = {
-        charges_enabled: account.charges_enabled,
-        payouts_enabled: account.payouts_enabled,
-        details_submitted: account.details_submitted,
+        charges_enabled:   profile.stripe_charges_enabled,
+        payouts_enabled:   profile.stripe_payouts_enabled,
+        details_submitted: profile.stripe_details_submitted,
       }
-    } catch {
-      // Account may have been deleted
+    }
+
+    if (!accountStatus || (!accountStatus.charges_enabled && !accountStatus.details_submitted)) {
+      try {
+        const account = await getStripe().accounts.retrieve(profile.stripe_account_id)
+        accountStatus = {
+          charges_enabled:   account.charges_enabled,
+          payouts_enabled:   account.payouts_enabled,
+          details_submitted: account.details_submitted,
+        }
+      } catch {
+        // Account may have been deleted
+      }
     }
   }
+
+  const feePercent = getPlatformFeePercent()
+  const creatorPercent = (100 - feePercent).toFixed(0)
 
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="text-xl font-bold text-text-primary">Payout Settings</h1>
         <p className="text-sm text-text-secondary mt-1">
-          Connect your Stripe account to receive earnings from subscriptions and PPV purchases.
+          Connect your Stripe account to receive earnings from subscriptions, tips, and pay-per-view purchases.
         </p>
       </div>
 
@@ -82,14 +100,15 @@ export default async function ConnectPage() {
             <div>
               <p className="font-medium text-text-primary text-sm">No payout account connected</p>
               <p className="text-xs text-text-muted mt-1">
-                Connect via Stripe Express — takes about 5 minutes. You&apos;ll receive payouts directly to your bank.
+                Connect with Stripe to receive payouts. You&apos;ll get a full Stripe dashboard
+                to track earnings and manage your account.
               </p>
             </div>
 
             <ul className="text-xs text-text-muted space-y-1.5">
-              <li>✓ You keep ~80% after platform and Stripe fees</li>
-              <li>✓ Payouts sent automatically</li>
-              <li>✓ Secure via Stripe</li>
+              <li>✓ You keep {creatorPercent}% of every payment (platform fee: {feePercent}%)</li>
+              <li>✓ Payouts sent automatically to your bank</li>
+              <li>✓ Full Stripe dashboard for reporting and tax docs</li>
             </ul>
 
             <ConnectButton profileId={profile.id} hasAccount={false} detailsSubmitted={false} />

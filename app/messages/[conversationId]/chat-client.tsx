@@ -174,6 +174,7 @@ export function ChatClient({
   const [lightbox, setLightbox] = useState<{ urls: string[]; index: number } | null>(null)
   const [unlocking, setUnlocking] = useState<{ messageId: string; priceUsd: number } | null>(null)
   const [unlockSecret, setUnlockSecret] = useState<string | null>(null)
+  const [unlockAccount, setUnlockAccount] = useState<string | null>(null)
   const [unlockLoading, setUnlockLoading] = useState(false)
   const [favorite, setFavorite] = useState(initialFavorite)
   const [favoriteBusy, setFavoriteBusy] = useState(false)
@@ -622,6 +623,7 @@ export function ChatClient({
         return
       }
       setUnlockSecret(data.clientSecret)
+      setUnlockAccount(data.stripeAccount ?? null)
     } finally {
       setUnlockLoading(false)
     }
@@ -1157,16 +1159,18 @@ export function ChatClient({
     {unlockSecret && unlocking && (
       <PaymentModal
         clientSecret={unlockSecret}
+        stripeAccount={unlockAccount}
         title="Unlock this content"
         subtitle={`Pay $${unlocking.priceUsd.toFixed(2)} to view this message.`}
         label={`Pay $${unlocking.priceUsd.toFixed(2)}`}
         onSuccess={() => {
           setUnlockSecret(null)
+          setUnlockAccount(null)
           setUnlocking(null)
           // Server-rendered URLs will reflect the new purchase after refresh.
           router.refresh()
         }}
-        onClose={() => { setUnlockSecret(null); setUnlocking(null) }}
+        onClose={() => { setUnlockSecret(null); setUnlockAccount(null); setUnlocking(null) }}
       />
     )}
 

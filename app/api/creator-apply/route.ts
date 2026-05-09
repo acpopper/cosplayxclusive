@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { sendApplicationSubmitted } from '@/lib/email'
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
@@ -37,6 +38,7 @@ export async function POST(request: NextRequest) {
   }
 
   const service = createServiceClient()
+  const submittedAt = new Date().toISOString()
   const { error } = await service
     .from('profiles')
     .update({
@@ -44,13 +46,29 @@ export async function POST(request: NextRequest) {
       bio: body.bio || null,
       creator_status: 'pending',
       creator_application: body.application,
-      creator_applied_at: new Date().toISOString(),
+      creator_applied_at: submittedAt,
       subscription_price_usd: price,
-      updated_at: new Date().toISOString(),
+      updated_at: submittedAt,
     })
     .eq('id', user.id)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  if (user.email) {
+    const { data: updated } = await service
+      .from('profiles')
+      .select('username, display_name')
+      .eq('id', user.id)
+      .single()
+    await sendApplicationSubmitted({
+      userId:        user.id,
+      toEmail:       user.email,
+      displayName:   updated?.display_name ?? body.displayName ?? null,
+      username:      updated?.username ?? '',
+      applicationId: user.id,
+      submittedAt,
+    })
+  }
 
   return NextResponse.json({ ok: true })
 }

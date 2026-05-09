@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { getStripe } from '@/lib/stripe'
+import { getStripe, applicationFeeCents } from '@/lib/stripe'
 
 export async function POST(request: NextRequest) {
   try {
@@ -53,45 +53,32 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Creator has not set up payouts' }, { status: 400 })
     }
 
-    // Get or create Stripe customer for fan (on the platform account)
-    const { data: fanProfile } = await supabase
-      .from('profiles')
-      .select('stripe_customer_id')
-      .eq('id', user.id)
-      .single()
+    const priceInCents      = Math.round(post.price_usd * 100)
+    const applicationFeeAmt = applicationFeeCents(priceInCents, creator.platform_fee_percent)
 
-    let stripeCustomerId = fanProfile?.stripe_customer_id
-    if (!stripeCustomerId) {
-      const customer = await getStripe().customers.create({
-        email: user.email,
-        metadata: { supabase_user_id: user.id },
-      })
-      stripeCustomerId = customer.id
-      await supabase
-        .from('profiles')
-        .update({ stripe_customer_id: stripeCustomerId })
-        .eq('id', user.id)
-    }
-
-    const priceInCents       = Math.round(post.price_usd * 100)
-    const applicationFeeAmt  = Math.round(priceInCents * 0.20)
-
-    // Destination charge: PI lives on platform, funds routed to connected account
-    const paymentIntent = await getStripe().paymentIntents.create({
-      amount:                 priceInCents,
-      currency:               'usd',
-      customer:               stripeCustomerId,
-      application_fee_amount: applicationFeeAmt,
-      transfer_data:          { destination: creator.stripe_account_id },
-      metadata: {
-        type:       'ppv',
-        fan_id:     user.id,
-        creator_id: creator.id,
-        post_id:    postId,
+    // Direct charge: PaymentIntent is created on the connected account; the
+    // platform collects an application fee. Customer/payment-method are scoped
+    // to the connected account, so we don't pass a platform `customer`.
+    const paymentIntent = await getStripe().paymentIntents.create(
+      {
+        amount:                 priceInCents,
+        currency:               'usd',
+        application_fee_amount: applicationFeeAmt,
+        receipt_email:          user.email,
+        metadata: {
+          type:       'ppv',
+          fan_id:     user.id,
+          creator_id: creator.id,
+          post_id:    postId,
+        },
       },
-    })
+      { stripeAccount: creator.stripe_account_id },
+    )
 
-    return NextResponse.json({ clientSecret: paymentIntent.client_secret })
+    return NextResponse.json({
+      clientSecret:  paymentIntent.client_secret,
+      stripeAccount: creator.stripe_account_id,
+    })
   } catch (err) {
     console.error('[checkout/ppv]', err)
     return NextResponse.json(

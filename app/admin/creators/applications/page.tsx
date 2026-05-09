@@ -2,7 +2,9 @@ import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { ApprovalButtons } from '../../approval-buttons'
 import { ManageButtons } from '../../manage-buttons'
+import { CreatorFeeInput } from '../../creator-fee-input'
 import { CreatorsTabs } from '../tabs'
+import { getDefaultPlatformFeePercent } from '@/lib/stripe'
 import type { Profile } from '@/lib/types'
 
 export default async function AdminCreatorsApplicationsPage() {
@@ -19,6 +21,8 @@ export default async function AdminCreatorsApplicationsPage() {
   const suspended = applications?.filter((a) => a.creator_status === 'suspended') || []
   const rejected  = applications?.filter((a) => a.creator_status === 'rejected')  || []
 
+  const defaultFee = getDefaultPlatformFeePercent()
+
   return (
     <>
       <div className="mb-6">
@@ -34,7 +38,7 @@ export default async function AdminCreatorsApplicationsPage() {
       {pending.length > 0 && (
         <Section title="Pending Review">
           {pending.map((creator) => (
-            <ApplicationRow key={creator.id} creator={creator as Profile} />
+            <ApplicationRow key={creator.id} creator={creator as Profile} defaultFee={defaultFee} />
           ))}
         </Section>
       )}
@@ -42,7 +46,7 @@ export default async function AdminCreatorsApplicationsPage() {
       {approved.length > 0 && (
         <Section title="Active Creators">
           {approved.map((creator) => (
-            <ApplicationRow key={creator.id} creator={creator as Profile} />
+            <ApplicationRow key={creator.id} creator={creator as Profile} defaultFee={defaultFee} />
           ))}
         </Section>
       )}
@@ -50,7 +54,7 @@ export default async function AdminCreatorsApplicationsPage() {
       {suspended.length > 0 && (
         <Section title="Suspended">
           {suspended.map((creator) => (
-            <ApplicationRow key={creator.id} creator={creator as Profile} />
+            <ApplicationRow key={creator.id} creator={creator as Profile} defaultFee={defaultFee} />
           ))}
         </Section>
       )}
@@ -58,7 +62,7 @@ export default async function AdminCreatorsApplicationsPage() {
       {rejected.length > 0 && (
         <Section title="Rejected">
           {rejected.map((creator) => (
-            <ApplicationRow key={creator.id} creator={creator as Profile} />
+            <ApplicationRow key={creator.id} creator={creator as Profile} defaultFee={defaultFee} />
           ))}
         </Section>
       )}
@@ -86,7 +90,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-function ApplicationRow({ creator }: { creator: Profile }) {
+function ApplicationRow({ creator, defaultFee }: { creator: Profile; defaultFee: number }) {
   const statusVariant = {
     approved:  'success',
     rejected:  'error',
@@ -150,16 +154,24 @@ function ApplicationRow({ creator }: { creator: Profile }) {
           )}
         </div>
 
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <Badge variant={statusVariant} className="text-xs capitalize hidden sm:flex">
-            {creator.creator_status}
-          </Badge>
+        <div className="flex flex-col items-end gap-3 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <Badge variant={statusVariant} className="text-xs capitalize hidden sm:flex">
+              {creator.creator_status}
+            </Badge>
 
-          {creator.creator_status === 'pending' ? (
-            <ApprovalButtons creatorId={creator.id} />
-          ) : (
-            <ManageButtons creatorId={creator.id} status={creator.creator_status!} />
-          )}
+            {creator.creator_status === 'pending' ? (
+              <ApprovalButtons creatorId={creator.id} />
+            ) : (
+              <ManageButtons creatorId={creator.id} status={creator.creator_status!} />
+            )}
+          </div>
+
+          <CreatorFeeInput
+            creatorId={creator.id}
+            initialValue={creator.platform_fee_percent}
+            defaultFee={defaultFee}
+          />
         </div>
       </div>
     </div>

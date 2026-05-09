@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { getStripe } from '@/lib/stripe'
+import { getStripe, applicationFeeCents } from '@/lib/stripe'
 
 export async function POST(request: NextRequest) {
   try {
@@ -31,8 +31,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Cannot purchase your own message' }, { status: 400 })
     }
 
-    // Buyer must be a participant of the conversation; RLS would block but we
-    // check explicitly for a clear error.
     const { data: conversation } = await supabase
       .from('conversations')
       .select('participant_a, participant_b')
@@ -54,51 +52,37 @@ export async function POST(request: NextRequest) {
 
     const { data: creator } = await supabase
       .from('profiles')
-      .select('id, stripe_account_id')
+      .select('id, stripe_account_id, platform_fee_percent')
       .eq('id', message.sender_id)
       .single()
     if (!creator?.stripe_account_id) {
       return NextResponse.json({ error: 'Creator has not set up payouts' }, { status: 400 })
     }
 
-    // Get / create Stripe customer for the buyer (platform account)
-    const { data: fanProfile } = await supabase
-      .from('profiles')
-      .select('stripe_customer_id')
-      .eq('id', user.id)
-      .single()
-
-    let stripeCustomerId = fanProfile?.stripe_customer_id
-    if (!stripeCustomerId) {
-      const customer = await getStripe().customers.create({
-        email:    user.email,
-        metadata: { supabase_user_id: user.id },
-      })
-      stripeCustomerId = customer.id
-      await supabase
-        .from('profiles')
-        .update({ stripe_customer_id: stripeCustomerId })
-        .eq('id', user.id)
-    }
-
     const priceInCents      = Math.round(message.price_usd * 100)
-    const applicationFeeAmt = Math.round(priceInCents * 0.20)
+    const applicationFeeAmt = applicationFeeCents(priceInCents, creator.platform_fee_percent)
 
-    const paymentIntent = await getStripe().paymentIntents.create({
-      amount:                 priceInCents,
-      currency:               'usd',
-      customer:               stripeCustomerId,
-      application_fee_amount: applicationFeeAmt,
-      transfer_data:          { destination: creator.stripe_account_id },
-      metadata: {
-        type:       'message_ppv',
-        fan_id:     user.id,
-        creator_id: creator.id,
-        message_id: messageId,
+    // Direct charge on the creator's connected account.
+    const paymentIntent = await getStripe().paymentIntents.create(
+      {
+        amount:                 priceInCents,
+        currency:               'usd',
+        application_fee_amount: applicationFeeAmt,
+        receipt_email:          user.email,
+        metadata: {
+          type:       'message_ppv',
+          fan_id:     user.id,
+          creator_id: creator.id,
+          message_id: messageId,
+        },
       },
-    })
+      { stripeAccount: creator.stripe_account_id },
+    )
 
-    return NextResponse.json({ clientSecret: paymentIntent.client_secret })
+    return NextResponse.json({
+      clientSecret:  paymentIntent.client_secret,
+      stripeAccount: creator.stripe_account_id,
+    })
   } catch (err) {
     console.error('[checkout/message-ppv]', err)
     return NextResponse.json(

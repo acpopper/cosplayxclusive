@@ -43,15 +43,25 @@ export async function POST(request: NextRequest) {
   if (creatorUser?.email) {
     const { data: creatorProfile } = await serviceClient
       .from('profiles')
-      .select('username')
+      .select('username, display_name')
       .eq('id', creatorId)
       .single()
 
     const username = creatorProfile?.username ?? creatorUser.email
     if (action === 'approve') {
-      await sendCreatorApproved(creatorId, creatorUser.email, username)
+      await sendCreatorApproved({
+        userId:      creatorId,
+        toEmail:     creatorUser.email,
+        displayName: creatorProfile?.display_name ?? null,
+        username,
+      })
     } else {
-      await sendCreatorRejected(creatorId, creatorUser.email, username)
+      await sendCreatorRejected({
+        userId:      creatorId,
+        toEmail:     creatorUser.email,
+        displayName: creatorProfile?.display_name ?? null,
+        username,
+      })
     }
   }
 

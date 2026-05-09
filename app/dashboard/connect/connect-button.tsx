@@ -15,7 +15,12 @@ export function ConnectButton({ profileId, hasAccount, detailsSubmitted }: Conne
   async function handleConnect() {
     setLoading(true)
     try {
-      const res = await fetch('/api/connect/onboard', {
+      // Fully-onboarded creators go to the account-update flow; everyone else
+      // goes through onboarding (which will resume mid-flow if partial).
+      const endpoint = hasAccount && detailsSubmitted
+        ? '/api/connect/dashboard'
+        : '/api/connect/onboard'
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ profileId }),
