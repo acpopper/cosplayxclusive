@@ -3,7 +3,19 @@ import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { getStripe, getPlatformFeePercent } from '@/lib/stripe'
 import { maybeSendAutoMessage, isReturningSubscriber } from '@/lib/auto-message'
 import { sendNewFreeFollower } from '@/lib/email'
+import type Stripe from 'stripe'
 
+// Subscribe a fan to a creator.
+//
+// Free creators → no Stripe interaction; we insert an "active" subscription row
+// directly. Returns `{ url }` so the client can refresh-via-redirect to pick up
+// the new server-rendered subscription state.
+//
+// Paid creators → direct-charge subscription on the creator's connected
+// account. We create (or reuse) a Customer on that account, create the
+// Subscription with `default_incomplete` payment behavior, and return the
+// first invoice's PaymentIntent `client_secret` so the fan can confirm payment
+// inside an embedded Stripe Elements modal — no redirect to Checkout.
 export async function POST(request: NextRequest) {
   try {
     const { creatorId } = await request.json()
@@ -50,16 +62,15 @@ export async function POST(request: NextRequest) {
       .eq('fan_id', user.id)
       .eq('creator_id', creatorId)
       .eq('status', 'active')
-      .single()
+      .maybeSingle()
 
     if (existingSub) {
       return NextResponse.json({ error: 'Already subscribed' }, { status: 400 })
     }
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-    const successUrl = `${appUrl}/${creator.username}?subscribed=true`
 
-    // Free creator — grant access directly without Stripe
+    // ── Free creator: grant access without Stripe ───────────────────────────
     if (creator.subscription_price_usd === 0) {
       const service = createServiceClient()
       const isReturn = await isReturningSubscriber(service, user.id, creatorId)
@@ -107,20 +118,35 @@ export async function POST(request: NextRequest) {
         })
       }
 
-      return NextResponse.json({ url: successUrl })
+      return NextResponse.json({
+        kind: 'free',
+        url:  `${appUrl}/${creator.username}?subscribed=true`,
+      })
     }
 
+    // ── Paid creator: embedded direct-charge subscription ───────────────────
     if (!creator.stripe_account_id) {
       return NextResponse.json({ error: 'Creator has not set up payouts yet' }, { status: 400 })
     }
 
+    const stripeAccount = creator.stripe_account_id as string
+    const stripe = getStripe()
+
+    // Customer must live on the connected account for direct-charge subs.
+    // Look up by email (so renewals reuse the same customer); create if absent.
+    const customers = await stripe.customers.list(
+      { email: user.email ?? undefined, limit: 1 },
+      { stripeAccount },
+    )
+    const customer = customers.data[0] ?? await stripe.customers.create(
+      { email: user.email ?? undefined, metadata: { fan_id: user.id } },
+      { stripeAccount },
+    )
+
     const priceInCents = Math.round(creator.subscription_price_usd * 100)
     const applicationFeePercent = getPlatformFeePercent(creator.platform_fee_percent)
 
-    // Direct-charge subscription on the creator's connected account.
-    // Price + customer both live on the connected account; we collect an
-    // application fee per period.
-    const price = await getStripe().prices.create(
+    const price = await stripe.prices.create(
       {
         unit_amount: priceInCents,
         currency: 'usd',
@@ -129,33 +155,54 @@ export async function POST(request: NextRequest) {
           name: `${creator.display_name || creator.username} — Monthly Subscription`,
         },
       },
-      { stripeAccount: creator.stripe_account_id }
+      { stripeAccount },
     )
 
-    const session = await getStripe().checkout.sessions.create(
+    const subscription = await stripe.subscriptions.create(
       {
-        mode: 'subscription',
-        customer_email: user.email,
-        line_items: [{ price: price.id, quantity: 1 }],
-        subscription_data: {
-          application_fee_percent: applicationFeePercent,
-          metadata: {
-            fan_id: user.id,
-            creator_id: creatorId,
-          },
+        customer: customer.id,
+        items: [{ price: price.id }],
+        application_fee_percent: applicationFeePercent,
+        payment_behavior: 'default_incomplete',
+        payment_settings: {
+          save_default_payment_method: 'on_subscription',
+          payment_method_types: ['card'],
         },
-        success_url: successUrl,
-        cancel_url: `${appUrl}/${creator.username}`,
+        expand: ['latest_invoice.confirmation_secret', 'latest_invoice.payment_intent'],
         metadata: {
           fan_id: user.id,
           creator_id: creatorId,
-          type: 'subscription',
         },
       },
-      { stripeAccount: creator.stripe_account_id }
+      { stripeAccount },
     )
 
-    return NextResponse.json({ url: session.url })
+    // Stripe v22: latest_invoice.confirmation_secret is the new home for the
+    // client secret used by Elements. We also fall back to payment_intent for
+    // older API versions / regional differences.
+    const invoice = subscription.latest_invoice as
+      | (Stripe.Invoice & {
+          confirmation_secret?: { client_secret: string }
+          payment_intent?: string | Stripe.PaymentIntent | null
+        })
+      | null
+    const clientSecret =
+      invoice?.confirmation_secret?.client_secret
+      ?? (typeof invoice?.payment_intent === 'object'
+        ? invoice?.payment_intent?.client_secret
+        : null)
+
+    if (!clientSecret) {
+      console.error('[checkout/subscribe] no client secret on incomplete sub', subscription.id)
+      return NextResponse.json({ error: 'Could not initialize payment' }, { status: 500 })
+    }
+
+    return NextResponse.json({
+      kind:                  'paid',
+      clientSecret,
+      stripeAccount,
+      subscriptionId:        subscription.id,
+    })
   } catch (err) {
     console.error('[checkout/subscribe]', err)
     return NextResponse.json(

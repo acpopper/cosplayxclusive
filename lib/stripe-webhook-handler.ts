@@ -434,9 +434,17 @@ async function handleSubscriptionChange(supabase: SupabaseClient, event: Stripe.
     ? new Date(firstItem.current_period_end * 1000).toISOString()
     : null
 
-  const isReturn = event.type === 'customer.subscription.created'
-    ? await isReturningSubscriber(supabase, meta.fan_id, meta.creator_id)
-    : false
+  // Embedded direct-charge subs are created with `payment_behavior:
+  // default_incomplete`, so the first event we see is `customer.subscription.
+  // created` with status='incomplete'. Side-effects (welcome emails, transaction
+  // row, notifications) must wait until the sub flips to `active` — which
+  // arrives as `customer.subscription.updated`.
+  const { data: priorRow } = await supabase
+    .from('subscriptions')
+    .select('status')
+    .eq('fan_id', meta.fan_id)
+    .eq('creator_id', meta.creator_id)
+    .maybeSingle()
 
   await supabase.from('subscriptions').upsert(
     {
@@ -454,7 +462,13 @@ async function handleSubscriptionChange(supabase: SupabaseClient, event: Stripe.
     { onConflict: 'fan_id,creator_id' },
   )
 
-  if (event.type !== 'customer.subscription.created') return
+  const becameActive =
+    (subscription.status === 'active' || subscription.status === 'trialing')
+    && priorRow?.status !== 'active' && priorRow?.status !== 'trialing'
+
+  if (!becameActive) return
+
+  const isReturn = await isReturningSubscriber(supabase, meta.fan_id, meta.creator_id)
 
   const { data: creator } = await supabase
     .from('profiles')

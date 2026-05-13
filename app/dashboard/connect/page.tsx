@@ -1,7 +1,11 @@
 import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { getStripe, getPlatformFeePercent } from '@/lib/stripe'
 import { ConnectButton } from './connect-button'
+
+// Avoid caching this page — Stripe state can change at any time and we want
+// page renders to reflect the freshest capability flags.
+export const dynamic = 'force-dynamic'
 
 export default async function ConnectPage() {
   const supabase = await createClient()
@@ -16,38 +20,60 @@ export default async function ConnectPage() {
 
   if (!profile) redirect('/dashboard')
 
-  // Prefer the cached flags synced via account.updated webhook, but fall back
-  // to a live Stripe call when they haven't been populated yet.
+  // Always reconcile with Stripe when an account exists and any capability
+  // isn't fully enabled. This makes the page self-healing even if
+  // `account.updated` webhooks aren't being delivered (misconfigured endpoint,
+  // wrong signing secret, etc.) and ensures the "partial completion" warning
+  // accurately reflects Stripe's view of the account.
   let accountStatus: { charges_enabled: boolean; payouts_enabled: boolean; details_submitted: boolean } | null = null
 
   if (profile.stripe_account_id) {
-    if (
-      profile.stripe_charges_enabled !== undefined &&
-      profile.stripe_details_submitted !== undefined
-    ) {
-      accountStatus = {
-        charges_enabled:   profile.stripe_charges_enabled,
-        payouts_enabled:   profile.stripe_payouts_enabled,
-        details_submitted: profile.stripe_details_submitted,
-      }
+    const cached = {
+      charges_enabled:   !!profile.stripe_charges_enabled,
+      payouts_enabled:   !!profile.stripe_payouts_enabled,
+      details_submitted: !!profile.stripe_details_submitted,
     }
+    accountStatus = cached
 
-    if (!accountStatus || (!accountStatus.charges_enabled && !accountStatus.details_submitted)) {
+    const fullyEnabled = cached.charges_enabled && cached.payouts_enabled && cached.details_submitted
+    if (!fullyEnabled) {
       try {
         const account = await getStripe().accounts.retrieve(profile.stripe_account_id)
-        accountStatus = {
-          charges_enabled:   account.charges_enabled,
-          payouts_enabled:   account.payouts_enabled,
-          details_submitted: account.details_submitted,
+        const live = {
+          charges_enabled:   !!account.charges_enabled,
+          payouts_enabled:   !!account.payouts_enabled,
+          details_submitted: !!account.details_submitted,
         }
-      } catch {
-        // Account may have been deleted
+        accountStatus = live
+
+        // Persist any drift so other pages and downstream queries see fresh
+        // values without another Stripe roundtrip.
+        const drifted =
+          live.charges_enabled   !== cached.charges_enabled   ||
+          live.payouts_enabled   !== cached.payouts_enabled   ||
+          live.details_submitted !== cached.details_submitted
+        if (drifted) {
+          await createServiceClient()
+            .from('profiles')
+            .update({
+              stripe_charges_enabled:   live.charges_enabled,
+              stripe_payouts_enabled:   live.payouts_enabled,
+              stripe_details_submitted: live.details_submitted,
+              updated_at:               new Date().toISOString(),
+            })
+            .eq('id', profile.id)
+        }
+      } catch (err) {
+        console.error('[connect/page] live account retrieve failed:', err)
+        // Fall back to cached values — better than nothing
       }
     }
   }
 
   const feePercent = getPlatformFeePercent()
   const creatorPercent = (100 - feePercent).toFixed(0)
+
+  const needsGuide = !accountStatus || !accountStatus.details_submitted
 
   return (
     <div className="flex flex-col gap-6">
@@ -57,6 +83,20 @@ export default async function ConnectPage() {
           Connect your Stripe account to receive earnings from subscriptions, tips, and pay-per-view purchases.
         </p>
       </div>
+
+      {needsGuide && (
+        <a
+          href="/stripe-setup-guide.pdf"
+          download
+          className="inline-flex items-center gap-2 self-start rounded-xl border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-accent hover:bg-accent/10 hover:border-accent/50 transition-colors max-w-xl"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M4 8a2 2 0 012-2h2.586a1 1 0 01.707.293l2.414 2.414a1 1 0 00.707.293H18a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2V8z" />
+          </svg>
+          <span className="font-medium">Before you start</span>
+          <span className="text-text-muted">— download our Stripe setup guide (PDF)</span>
+        </a>
+      )}
 
       <div className="bg-bg-card border border-border rounded-2xl p-6 max-w-xl">
         {accountStatus ? (

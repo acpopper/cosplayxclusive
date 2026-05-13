@@ -129,6 +129,8 @@ export function PostCard({
   const [checkoutLoading, setCheckoutLoading] = useState(false)
   const [ppvSecret, setPpvSecret]             = useState<string | null>(null)
   const [ppvAccount, setPpvAccount]            = useState<string | null>(null)
+  const [subSecret, setSubSecret]             = useState<string | null>(null)
+  const [subAccount, setSubAccount]           = useState<string | null>(null)
   const [slideIndex, setSlideIndex]           = useState(0)
   const [lightboxIndex, setLightboxIndex]     = useState<number | null>(null)
   const [menuOpen, setMenuOpen]               = useState(false)
@@ -225,7 +227,12 @@ export function PostCard({
         body: JSON.stringify({ creatorId: creator.id }),
       })
       const data = await res.json()
-      if (data.url) window.location.href = data.url
+      if (data.kind === 'free' && data.url) {
+        window.location.href = data.url
+      } else if (data.clientSecret) {
+        setSubSecret(data.clientSecret)
+        setSubAccount(data.stripeAccount ?? null)
+      }
     } finally { setCheckoutLoading(false) }
   }
 
@@ -595,6 +602,18 @@ export function PostCard({
           label={`Pay $${post.price_usd?.toFixed(2)}`}
           onSuccess={() => { setPpvSecret(null); setPpvAccount(null); router.refresh() }}
           onClose={() => { setPpvSecret(null); setPpvAccount(null) }}
+        />
+      )}
+
+      {subSecret && (
+        <PaymentModal
+          clientSecret={subSecret}
+          stripeAccount={subAccount}
+          title={`Subscribe to ${creator.display_name || creator.username}`}
+          subtitle={`$${creator.subscription_price_usd}/month — cancel anytime.`}
+          label={`Subscribe · $${creator.subscription_price_usd}/mo`}
+          onSuccess={() => { setSubSecret(null); setSubAccount(null); router.refresh() }}
+          onClose={() => { setSubSecret(null); setSubAccount(null) }}
         />
       )}
 

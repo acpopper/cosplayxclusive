@@ -8,6 +8,7 @@ import { PostCard } from '@/components/post-card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Nav } from '@/components/nav'
+import { PaymentModal } from '@/components/payment-modal'
 import posthog from 'posthog-js'
 
 interface PostWithUrls {
@@ -52,77 +53,6 @@ function Modal({
         {children}
       </div>
     </div>
-  )
-}
-
-// ─── Payment confirmation modal ─────────────────────────────────────────────
-function PaymentModal({
-  creator,
-  onConfirm,
-  onClose,
-  loading,
-  error,
-}: {
-  creator: Profile
-  onConfirm: () => void
-  onClose: () => void
-  loading: boolean
-  error: string | null
-}) {
-  return (
-    <Modal onClose={onClose}>
-      <div className="p-6">
-        {/* Creator info */}
-        <div className="flex items-center gap-3 mb-5">
-          <div className="h-12 w-12 rounded-full overflow-hidden bg-bg-elevated flex-shrink-0">
-            {creator.avatar_url ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={creator.avatar_url} alt="" className="h-full w-full object-cover" />
-            ) : (
-              <div className="h-full w-full flex items-center justify-center bg-gradient-to-br from-accent to-accent-alt">
-                <span className="text-lg font-bold text-white">
-                  {(creator.display_name || creator.username)[0].toUpperCase()}
-                </span>
-              </div>
-            )}
-          </div>
-          <div>
-            <p className="font-semibold text-text-primary">
-              {creator.display_name || creator.username}
-            </p>
-            <p className="text-xs text-text-muted">@{creator.username}</p>
-          </div>
-        </div>
-
-        <h2 className="text-lg font-bold text-text-primary mb-1">Confirm subscription</h2>
-        <p className="text-sm text-text-secondary mb-1">
-          You&apos;ll be charged{' '}
-          <span className="font-semibold text-text-primary">
-            ${creator.subscription_price_usd}/month
-          </span>{' '}
-          and get full access to their exclusive content.
-        </p>
-        <p className="text-xs text-text-muted mb-6">
-          You&apos;ll be redirected to our secure payment page.
-        </p>
-
-        {error && <p className="text-xs text-error mb-3">{error}</p>}
-
-        <div className="flex flex-col gap-2">
-          <Button
-            size="md"
-            onClick={onConfirm}
-            loading={loading}
-            className="w-full shadow-[0_0_20px_rgba(224,64,122,0.3)]"
-          >
-            Continue to payment →
-          </Button>
-          <Button size="md" variant="ghost" onClick={onClose} disabled={loading} className="w-full">
-            Cancel
-          </Button>
-        </div>
-      </div>
-    </Modal>
   )
 }
 
@@ -193,12 +123,14 @@ export function CreatorProfileClient({
   // Optimistic subscription state
   const [localSubscribed, setLocalSubscribed] = useState(isSubscribed)
 
-  // Modal: null | 'payment' | 'unsubscribe'
-  const [modal, setModal] = useState<'payment' | 'unsubscribe' | null>(null)
+  // Modal: null | 'unsubscribe'  (paid sub uses PaymentModal directly via subSecret)
+  const [modal, setModal] = useState<'unsubscribe' | null>(null)
 
   // Loading + error per action
   const [subscribeLoading, setSubscribeLoading] = useState(false)
   const [subscribeError, setSubscribeError] = useState<string | null>(null)
+  const [subSecret, setSubSecret]   = useState<string | null>(null)
+  const [subAccount, setSubAccount] = useState<string | null>(null)
   const [unsubLoading, setUnsubLoading] = useState(false)
   const [unsubError, setUnsubError] = useState<string | null>(null)
   // messageLoading removed — Message button now just navigates, no API call
@@ -239,32 +171,23 @@ export function CreatorProfileClient({
     router.refresh()
   }
 
-  function handleFollowClick() {
+  async function handleFollowClick() {
     if (!viewerId) { router.push('/login'); return }
     if (localSubscribed) {
-      // Already subscribed — always confirm before unsubscribing
       setUnsubError(null)
       setModal('unsubscribe')
-    } else {
-      // Not subscribed — trigger the appropriate sub flow
-      if (isFree) {
-        // Free: subscribe instantly, no modal
-        handleSubscribeFree()
-      } else {
-        // Paid: show payment confirmation modal
-        setSubscribeError(null)
-        setModal('payment')
-      }
+      return
     }
-  }
 
-  async function handleSubscribeFree() {
+    // Not subscribed yet — start the subscribe flow. Free: instant insert.
+    // Paid: open the embedded PaymentModal with a client_secret.
     setSubscribeLoading(true)
     setSubscribeError(null)
     posthog.capture('subscription_initiated', {
       creator_id: creator.id,
       creator_username: creator.username,
-      subscription_type: 'free',
+      subscription_type: isFree ? 'free' : 'paid',
+      subscription_price_usd: creator.subscription_price_usd,
     })
     try {
       const res = await fetch('/api/checkout/subscribe', {
@@ -277,36 +200,17 @@ export function CreatorProfileClient({
         setSubscribeError(data.error ?? 'Something went wrong.')
         return
       }
-      setLocalSubscribed(true)
-      // Redirect to refresh server state (updates post access, etc.)
-      window.location.href = data.url
-    } finally {
-      setSubscribeLoading(false)
-    }
-  }
-
-  async function handleSubscribePaid() {
-    // Called from inside payment modal
-    setSubscribeLoading(true)
-    setSubscribeError(null)
-    posthog.capture('subscription_initiated', {
-      creator_id: creator.id,
-      creator_username: creator.username,
-      subscription_type: 'paid',
-      subscription_price_usd: creator.subscription_price_usd,
-    })
-    try {
-      const res = await fetch('/api/checkout/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ creatorId: creator.id }),
-      })
-      const data = await res.json()
-      if (!res.ok || !data.url) {
-        setSubscribeError(data.error ?? 'Something went wrong. Please try again.')
+      if (data.kind === 'free') {
+        setLocalSubscribed(true)
+        window.location.href = data.url
         return
       }
-      window.location.href = data.url
+      if (data.clientSecret) {
+        setSubSecret(data.clientSecret)
+        setSubAccount(data.stripeAccount ?? null)
+      } else {
+        setSubscribeError('Could not start payment. Please try again.')
+      }
     } finally {
       setSubscribeLoading(false)
     }
@@ -519,14 +423,20 @@ export function CreatorProfileClient({
         </div>
       </div>
 
-      {/* Payment confirmation modal — paid creators, not yet subscribed */}
-      {modal === 'payment' && (
+      {/* Subscribe payment modal — embedded Stripe Elements, no redirect */}
+      {subSecret && (
         <PaymentModal
-          creator={creator}
-          onConfirm={handleSubscribePaid}
-          onClose={() => { setModal(null); setSubscribeError(null) }}
-          loading={subscribeLoading}
-          error={subscribeError}
+          clientSecret={subSecret}
+          stripeAccount={subAccount}
+          title={`Subscribe to ${creator.display_name || creator.username}`}
+          subtitle={`$${creator.subscription_price_usd}/month — cancel anytime.`}
+          label={`Subscribe · $${creator.subscription_price_usd}/mo`}
+          onSuccess={() => {
+            setSubSecret(null); setSubAccount(null)
+            setLocalSubscribed(true)
+            router.refresh()
+          }}
+          onClose={() => { setSubSecret(null); setSubAccount(null) }}
         />
       )}
 

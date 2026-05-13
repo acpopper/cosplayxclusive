@@ -24,7 +24,11 @@
       "Read(//c/Users/alanp/Downloads/stripe_1.40.9_windows_x86_64/**)",
       "Read(//c/Users/alanp/**)",
       "PowerShell($currentUserPath = [Environment]::GetEnvironmentVariable\\('Path', 'User'\\); Write-Output \"CURRENT_USER_PATH:\"; Write-Output $currentUserPath; Write-Output \"---\"; Write-Output \"BIN_EXISTS: $\\(Test-Path 'C:\\\\Users\\\\alanp\\\\bin'\\)\")",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(curl -sS -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/dashboard/connect)",
+      "Bash(curl -sS -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/stripe-setup-guide.pdf)",
+      "Bash(curl *)"
     ]
   }
 }
