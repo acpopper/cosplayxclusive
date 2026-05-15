@@ -28,7 +28,30 @@
       "Bash(echo \"exit=$?\")",
       "Bash(curl -sS -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/dashboard/connect)",
       "Bash(curl -sS -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/stripe-setup-guide.pdf)",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "mcp__stripe__get_stripe_account_info",
+      "mcp__stripe__stripe_api_search",
+      "mcp__stripe__stripe_api_execute",
+      "PowerShell(& \"$env:USERPROFILE\\\\bin\\\\stripe.exe\" webhook_endpoints list)",
+      "PowerShell(stripe webhook_endpoints *)",
+      "PowerShell(& \"$env:USERPROFILE\\\\bin\\\\stripe.exe\" webhook_endpoints list --live)",
+      "PowerShell(& \"$env:USERPROFILE\\\\bin\\\\stripe.exe\" webhook_endpoints retrieve we_1TVFcnD1fgmLBjhkJms43z4J --live; Write-Host \"---\"; & \"$env:USERPROFILE\\\\bin\\\\stripe.exe\" webhook_endpoints retrieve we_1TVFedD1fgmLBjhkLBfXgyjJ --live)",
+      "PowerShell(& \"$env:USERPROFILE\\\\bin\\\\stripe.exe\" webhook_endpoints delete we_1TVFrPD1fgmLBjhkAdtKtxk9; Write-Host \"---\"; & \"$env:USERPROFILE\\\\bin\\\\stripe.exe\" webhook_endpoints delete we_1TVFq3D1fgmLBjhkVODIgig1)",
+      "mcp__plugin_supabase_supabase__list_projects",
+      "mcp__plugin_supabase_supabase__list_organizations",
+      "Bash(gh api *)",
+      "PowerShell(gh api *)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "PowerShell(Get-Content *)",
+      "WebFetch(domain:registry.npmjs.org)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:unpkg.com)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(New-Item *)",
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 100)",
+      "PowerShell(npx tsc --noEmit; \"exit code: $LASTEXITCODE\")"
     ]
   }
 }

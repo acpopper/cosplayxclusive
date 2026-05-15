@@ -163,7 +163,7 @@ function Lightbox({
         {isVideo && (
           <div className="absolute bottom-14 right-3 pointer-events-none">
             <div className="bg-black/55 text-white text-xs font-bold px-2 py-1 rounded-md">
-              cosplayxclusive.com/@{creatorUsername}
+              cosplayxclusive.com/{creatorUsername}
             </div>
           </div>
         )}
@@ -435,6 +435,8 @@ export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPost
   const [menuOpen, setMenuOpen]           = useState(false)
   const [reportOpen, setReportOpen]       = useState(false)
   const [moderationOpen, setModerationOpen] = useState(false)
+  const [deleteLoading, setDeleteLoading] = useState(false)
+  const [deleted, setDeleted]             = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -526,6 +528,27 @@ export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPost
   })
 
   const isOwnPost = viewerId === post.creator_id
+  const canDelete = isOwnPost || viewerIsAdmin
+
+  async function handleDelete() {
+    if (deleteLoading) return
+    if (!confirm('Delete this post? This cannot be undone.')) return
+    setDeleteLoading(true)
+    try {
+      const res = await fetch(`/api/posts/${post.id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({} as { error?: string }))
+        alert(data.error ?? 'Could not delete post.')
+        return
+      }
+      setDeleted(true)
+      router.refresh()
+    } finally {
+      setDeleteLoading(false)
+    }
+  }
+
+  if (deleted) return null
 
   return (
     <>
@@ -555,7 +578,7 @@ export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPost
           {post.access_type === 'subscriber_only' && post.hasAccess && <Badge variant="success" className="text-xs">Subscribed</Badge>}
           {post.access_type === 'ppv' && <Badge variant="warning" className="text-xs">{post.hasAccess ? 'Unlocked' : `$${post.price_usd?.toFixed(2)} PPV`}</Badge>}
 
-          {(!isOwnPost || viewerIsAdmin) && (
+          {(!isOwnPost || viewerIsAdmin || canDelete) && (
             <div className="relative" ref={menuRef}>
               <button
                 onClick={() => setMenuOpen((o) => !o)}
@@ -582,6 +605,15 @@ export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPost
                       className="w-full px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-elevated transition-colors border-t border-border first:border-t-0"
                     >
                       Moderation stats
+                    </button>
+                  )}
+                  {canDelete && (
+                    <button
+                      onClick={() => { setMenuOpen(false); handleDelete() }}
+                      disabled={deleteLoading}
+                      className="w-full px-3 py-2.5 text-left text-sm text-error hover:bg-error/10 transition-colors border-t border-border first:border-t-0 disabled:opacity-50"
+                    >
+                      {deleteLoading ? 'Deleting…' : 'Delete post'}
                     </button>
                   )}
                 </div>
@@ -612,7 +644,7 @@ export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPost
                         />
                         <div className="absolute bottom-12 right-3 pointer-events-none">
                           <div className="bg-black/55 text-white text-xs font-bold px-2 py-1 rounded-md">
-                            cosplayxclusive.com/@{post.creator.username}
+                            cosplayxclusive.com/{post.creator.username}
                           </div>
                         </div>
                       </>

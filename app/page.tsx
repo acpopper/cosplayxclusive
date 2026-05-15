@@ -40,7 +40,7 @@ export default function LandingPage() {
         <div className="relative mx-auto max-w-3xl">
           <div className="inline-flex items-center gap-2 rounded-full border border-accent/20 bg-accent-muted px-4 py-1.5 text-xs font-medium text-accent mb-6">
             <span>✦</span>
-            <span>The premium cosplay creator platform</span>
+            <span>A SFW cosplay creator platform with monetization tools</span>
           </div>
 
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-text-primary leading-[1.1]">
@@ -74,24 +74,6 @@ export default function LandingPage() {
           <p className="mt-4 text-xs text-text-muted">
             Free to join · No credit card required
           </p>
-        </div>
-      </section>
-
-      {/* Social proof / stats */}
-      <section className="py-12 border-y border-border bg-bg-card/30">
-        <div className="mx-auto max-w-4xl px-4">
-          <div className="grid grid-cols-3 gap-6 text-center">
-            {[
-              { value: '1,000+', label: 'Creators' },
-              { value: '50K+', label: 'Fans' },
-              { value: '$2M+', label: 'Paid to creators' },
-            ].map(({ value, label }) => (
-              <div key={label}>
-                <p className="text-2xl sm:text-3xl font-bold text-text-primary">{value}</p>
-                <p className="text-sm text-text-muted mt-1">{label}</p>
-              </div>
-            ))}
-          </div>
         </div>
       </section>
 

@@ -137,6 +137,8 @@ export function PostCard({
   const [reportOpen, setReportOpen]           = useState(false)
   const [moderationOpen, setModerationOpen]   = useState(false)
   const [showComments, setShowComments]       = useState(false)
+  const [deleteLoading, setDeleteLoading]     = useState(false)
+  const [deleted, setDeleted]                 = useState(false)
 
   const [likeCount, setLikeCount]     = useState(0)
   const [hasLiked, setHasLiked]       = useState(false)
@@ -201,7 +203,27 @@ export function PostCard({
   }
 
   const canReport = !!viewerId && viewerId !== creator.id
-  const showMenu  = canReport || viewerIsAdmin
+  const isOwner   = !!viewerId && viewerId === creator.id
+  const canDelete = isOwner || viewerIsAdmin
+  const showMenu  = canReport || viewerIsAdmin || canDelete
+
+  async function handleDelete() {
+    if (deleteLoading) return
+    if (!confirm('Delete this post? This cannot be undone.')) return
+    setDeleteLoading(true)
+    try {
+      const res = await fetch(`/api/posts/${post.id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({} as { error?: string }))
+        alert(data.error ?? 'Could not delete post.')
+        return
+      }
+      setDeleted(true)
+      router.refresh()
+    } finally {
+      setDeleteLoading(false)
+    }
+  }
 
   useEffect(() => {
     if (!menuOpen) return
@@ -287,6 +309,8 @@ export function PostCard({
     month: 'short', day: 'numeric', year: 'numeric',
   })
 
+  if (deleted) return null
+
   return (
     <>
       <div className="bg-bg-card border border-border rounded-2xl overflow-hidden relative">
@@ -316,9 +340,18 @@ export function PostCard({
                 {viewerIsAdmin && (
                   <button
                     onClick={() => { setMenuOpen(false); setModerationOpen(true) }}
-                    className="w-full px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-elevated transition-colors border-t border-border"
+                    className="w-full px-3 py-2.5 text-left text-sm text-text-primary hover:bg-bg-elevated transition-colors border-t border-border first:border-t-0"
                   >
                     Moderation stats
+                  </button>
+                )}
+                {canDelete && (
+                  <button
+                    onClick={() => { setMenuOpen(false); handleDelete() }}
+                    disabled={deleteLoading}
+                    className="w-full px-3 py-2.5 text-left text-sm text-error hover:bg-error/10 transition-colors border-t border-border first:border-t-0 disabled:opacity-50"
+                  >
+                    {deleteLoading ? 'Deleting…' : 'Delete post'}
                   </button>
                 )}
               </div>
@@ -350,7 +383,7 @@ export function PostCard({
                         />
                         <div className="absolute bottom-12 right-3 pointer-events-none">
                           <div className="bg-black/55 text-white text-xs font-bold px-2 py-1 rounded-md">
-                            cosplayxclusive.com/@{creator.username}
+                            cosplayxclusive.com/{creator.username}
                           </div>
                         </div>
                       </>
@@ -550,7 +583,7 @@ export function PostCard({
               {lbIsVideo && (
                 <div className="absolute bottom-14 right-3 pointer-events-none">
                   <div className="bg-black/55 text-white text-xs font-bold px-2 py-1 rounded-md">
-                    cosplayxclusive.com/@{creator.username}
+                    cosplayxclusive.com/{creator.username}
                   </div>
                 </div>
               )}

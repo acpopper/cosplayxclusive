@@ -178,7 +178,14 @@ export function NewPostForm({ creatorId }: { creatorId: string }) {
       }
 
       const res = await fetch('/api/posts/create', { method: 'POST', body: formData })
-      const data = await res.json()
+      // Parse body defensively — the platform can terminate a slow upload after
+      // the row is already inserted, leaving us with an empty/non-JSON response
+      // ("Unexpected end of JSON input" in production). Treat `res.ok` as truth.
+      const raw = await res.text()
+      let data: { error?: string } = {}
+      if (raw) {
+        try { data = JSON.parse(raw) } catch { /* keep empty */ }
+      }
       if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`)
 
       setFlash('Post published')

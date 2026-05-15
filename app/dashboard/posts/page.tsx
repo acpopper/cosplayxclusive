@@ -16,6 +16,42 @@ export default async function PostsPage() {
     .eq('creator_id', user.id)
     .order('published_at', { ascending: false })
 
+  // Generate signed URLs to the (watermarked, non-blurred) originals so the
+  // creator sees their own posts unblurred on their dashboard. Video posts
+  // fall back to the preview thumbnail since originals are video files.
+  const thumbPaths: string[] = []
+  for (const p of posts ?? []) {
+    const firstType = (p.media_types?.[0] ?? 'image') as string
+    const firstPath = p.media_paths?.[0]
+    if (firstType === 'image' && firstPath) thumbPaths.push(firstPath)
+  }
+  const signedMap = new Map<string, string>()
+  if (thumbPaths.length > 0) {
+    const { data: signed } = await supabase.storage
+      .from('originals')
+      .createSignedUrls(thumbPaths, 3600)
+    for (const row of signed ?? []) {
+      if (row.path && row.signedUrl) signedMap.set(row.path, row.signedUrl)
+    }
+  }
+
+  type PostRow = {
+    media_paths?: string[] | null
+    media_types?: string[] | null
+    preview_paths?: string[] | null
+  }
+  function thumbUrlFor(post: PostRow): string | null {
+    const firstType = (post.media_types?.[0] ?? 'image') as string
+    const firstPath = post.media_paths?.[0]
+    if (firstType === 'image' && firstPath && signedMap.has(firstPath)) {
+      return signedMap.get(firstPath)!
+    }
+    if (post.preview_paths?.[0]) {
+      return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/previews/${post.preview_paths[0]}`
+    }
+    return null
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
@@ -49,18 +85,21 @@ export default async function PostsPage() {
                 >
                   {/* Thumbnail */}
                   <div className="h-12 w-12 rounded-lg overflow-hidden bg-bg-elevated flex-shrink-0 relative">
-                    {post.preview_paths?.length > 0 ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/previews/${post.preview_paths[0]}`}
-                        alt=""
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      <div className="h-full w-full flex items-center justify-center text-text-muted text-xs">
-                        📷
-                      </div>
-                    )}
+                    {(() => {
+                      const url = thumbUrlFor(post)
+                      return url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={url}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="h-full w-full flex items-center justify-center text-text-muted text-xs">
+                          📷
+                        </div>
+                      )
+                    })()}
                     {/* Unpublished overlay dot */}
                     {!isPublished && (
                       <div className="absolute inset-0 bg-black/40 flex items-center justify-center">

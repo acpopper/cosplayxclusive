@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { PaymentModal } from '@/components/payment-modal'
 
@@ -652,7 +653,11 @@ export function ChatClient({
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
             </svg>
           </button>
-          <div className="h-9 w-9 rounded-full overflow-hidden bg-bg-elevated flex-shrink-0">
+          <Link
+            href={`/${otherProfile.username}`}
+            className="h-9 w-9 rounded-full overflow-hidden bg-bg-elevated flex-shrink-0 hover:opacity-80 transition-opacity"
+            aria-label={`View ${otherProfile.display_name || otherProfile.username}'s profile`}
+          >
             {otherProfile.avatar_url ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={otherProfile.avatar_url} alt="" className="h-full w-full object-cover" />
@@ -663,10 +668,10 @@ export function ChatClient({
                 </span>
               </div>
             )}
-          </div>
-          <div className="flex-1 min-w-0">
+          </Link>
+          <Link href={`/${otherProfile.username}`} className="flex-1 min-w-0 group">
             <div className="flex items-center gap-1.5">
-              <span className="text-sm font-semibold text-text-primary">
+              <span className="text-sm font-semibold text-text-primary group-hover:text-accent transition-colors">
                 {otherProfile.display_name || otherProfile.username}
               </span>
               {otherProfile.role === 'admin' && <AdminBadge />}
@@ -682,7 +687,7 @@ export function ChatClient({
               )}
             </div>
             <p className="text-xs text-text-muted">@{otherProfile.username}</p>
-          </div>
+          </Link>
 
           <button
             type="button"
@@ -759,27 +764,55 @@ export function ChatClient({
               }}
               className={['group flex gap-2 rounded-xl transition-shadow', isMe ? 'flex-row-reverse' : 'flex-row'].join(' ')}
             >
-              {/* Avatar */}
-              <div className="h-7 w-7 rounded-full overflow-hidden bg-bg-elevated flex-shrink-0 mt-0.5">
-                {sender?.avatar_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={sender.avatar_url} alt="" className="h-full w-full object-cover" />
-                ) : (
-                  <div className="h-full w-full flex items-center justify-center bg-gradient-to-br from-accent to-accent-alt">
-                    <span className="text-xs font-bold text-white">
-                      {(sender?.display_name || sender?.username || '?')[0].toUpperCase()}
-                    </span>
-                  </div>
-                )}
-              </div>
+              {/* Avatar — clickable for other users, plain for self */}
+              {!isMe && sender?.username ? (
+                <Link
+                  href={`/${sender.username}`}
+                  className="h-7 w-7 rounded-full overflow-hidden bg-bg-elevated flex-shrink-0 mt-0.5 hover:opacity-80 transition-opacity"
+                  aria-label={`View ${sender.display_name || sender.username}'s profile`}
+                >
+                  {sender.avatar_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={sender.avatar_url} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="h-full w-full flex items-center justify-center bg-gradient-to-br from-accent to-accent-alt">
+                      <span className="text-xs font-bold text-white">
+                        {(sender.display_name || sender.username)[0].toUpperCase()}
+                      </span>
+                    </div>
+                  )}
+                </Link>
+              ) : (
+                <div className="h-7 w-7 rounded-full overflow-hidden bg-bg-elevated flex-shrink-0 mt-0.5">
+                  {sender?.avatar_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={sender.avatar_url} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="h-full w-full flex items-center justify-center bg-gradient-to-br from-accent to-accent-alt">
+                      <span className="text-xs font-bold text-white">
+                        {(sender?.display_name || sender?.username || '?')[0].toUpperCase()}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className={['flex flex-col max-w-[75%]', isMe ? 'items-end' : 'items-start'].join(' ')}>
                 {/* Sender name + admin badge */}
                 {!isMe && sender && (
                   <div className="flex items-center gap-1 mb-0.5">
-                    <span className="text-xs font-medium text-text-secondary">
-                      {sender.display_name || sender.username}
-                    </span>
+                    {sender.username ? (
+                      <Link
+                        href={`/${sender.username}`}
+                        className="text-xs font-medium text-text-secondary hover:text-accent transition-colors"
+                      >
+                        {sender.display_name || sender.username}
+                      </Link>
+                    ) : (
+                      <span className="text-xs font-medium text-text-secondary">
+                        {sender.display_name || sender.username}
+                      </span>
+                    )}
                     {sender.role === 'admin' && <AdminBadge />}
                   </div>
                 )}

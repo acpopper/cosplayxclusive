@@ -174,7 +174,13 @@ export function EditPostForm({
       }
 
       const res = await fetch(`/api/posts/${postId}`, { method: 'PATCH', body: fd })
-      const data = await res.json()
+      // Defensive parse — slow uploads can return empty bodies after a timeout
+      // even when the update succeeded server-side.
+      const raw = await res.text()
+      let data: { error?: string } = {}
+      if (raw) {
+        try { data = JSON.parse(raw) } catch { /* keep empty */ }
+      }
       if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`)
 
       router.push('/dashboard/posts')

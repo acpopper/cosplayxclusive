@@ -12,7 +12,7 @@ export default async function DashboardPage() {
   // ── Base data ──────────────────────────────────────────────────────────────
   const [{ data: profile }, { data: posts }, { data: transactions }] = await Promise.all([
     supabase.from('profiles').select('*').eq('id', user.id).single(),
-    supabase.from('posts').select('id, caption, access_type, preview_paths, published_at').eq('creator_id', user.id).order('published_at', { ascending: false }),
+    supabase.from('posts').select('id, caption, access_type, preview_paths, media_paths, media_types, published_at').eq('creator_id', user.id).order('published_at', { ascending: false }),
     supabase.from('transactions').select('amount_usd, type, created_at').eq('creator_id', user.id).order('created_at', { ascending: false }),
   ])
 
@@ -77,6 +77,35 @@ export default async function DashboardPage() {
     .sort((a, b) => b.likes - a.likes)
     .slice(0, 3)
     .filter((p) => p.likes > 0)
+
+  // Sign the originals for top-post thumbnails so the creator sees their own
+  // posts unblurred. Falls back to the (blurred) preview for video posts.
+  const topThumbPaths: string[] = []
+  for (const p of topPosts) {
+    const firstType = (p.media_types?.[0] ?? 'image') as string
+    const firstPath = p.media_paths?.[0]
+    if (firstType === 'image' && firstPath) topThumbPaths.push(firstPath)
+  }
+  const topSignedMap = new Map<string, string>()
+  if (topThumbPaths.length > 0) {
+    const { data: signed } = await supabase.storage
+      .from('originals')
+      .createSignedUrls(topThumbPaths, 3600)
+    for (const row of signed ?? []) {
+      if (row.path && row.signedUrl) topSignedMap.set(row.path, row.signedUrl)
+    }
+  }
+  function topThumbUrl(p: (typeof topPosts)[number]): string | null {
+    const firstType = (p.media_types?.[0] ?? 'image') as string
+    const firstPath = p.media_paths?.[0]
+    if (firstType === 'image' && firstPath && topSignedMap.has(firstPath)) {
+      return topSignedMap.get(firstPath)!
+    }
+    if (p.preview_paths?.[0]) {
+      return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/previews/${p.preview_paths[0]}`
+    }
+    return null
+  }
 
   const isApproved = profile?.creator_status === 'approved'
   const isPending = profile?.creator_status === 'pending'
@@ -147,16 +176,19 @@ export default async function DashboardPage() {
                   {idx === 0 ? '🥇' : idx === 1 ? '🥈' : '🥉'}
                 </span>
                 <div className="h-10 w-10 rounded-lg overflow-hidden bg-bg-elevated flex-shrink-0">
-                  {p.preview_paths?.[0] ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/previews/${p.preview_paths[0]}`}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <div className="h-full w-full flex items-center justify-center text-text-muted text-xs">📷</div>
-                  )}
+                  {(() => {
+                    const url = topThumbUrl(p)
+                    return url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={url}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="h-full w-full flex items-center justify-center text-text-muted text-xs">📷</div>
+                    )
+                  })()}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-text-primary truncate">{p.caption || <span className="italic text-text-muted">No caption</span>}</p>

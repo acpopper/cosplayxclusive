@@ -8,7 +8,7 @@ async function applyWatermark(buffer: Buffer, username: string): Promise<Buffer>
   const image = sharp(buffer)
   const { width = 800, height = 600 } = await image.metadata()
 
-  const label = `cosplayxclusive.com/@${username}`
+  const label = `cosplayxclusive.com/${username}`
   const fontSize = Math.max(14, Math.round(width * 0.028))
   const approxTextW = Math.round(label.length * fontSize * 0.55)
   const approxTextH = Math.round(fontSize * 1.4)
@@ -184,6 +184,38 @@ export async function PATCH(request: NextRequest, ctx: RouteContext) {
   }
 
   const { error } = await service.from('posts').update(updates).eq('id', postId)
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  return NextResponse.json({ ok: true })
+}
+
+export async function DELETE(_request: NextRequest, ctx: RouteContext) {
+  const { postId } = await ctx.params
+
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .single()
+  const isAdmin = profile?.role === 'admin'
+
+  const service = createServiceClient()
+  const { data: post } = await service
+    .from('posts')
+    .select('id, creator_id')
+    .eq('id', postId)
+    .single()
+
+  if (!post) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (post.creator_id !== user.id && !isAdmin) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+
+  const { error } = await service.from('posts').delete().eq('id', postId)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   return NextResponse.json({ ok: true })

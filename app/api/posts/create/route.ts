@@ -39,7 +39,7 @@ async function applyWatermark(buffer: Buffer, username: string): Promise<Buffer>
   const image = sharp(buffer)
   const { width = 800, height = 600 } = await image.metadata()
 
-  const label = `cosplayxclusive.com/@${username}`
+  const label = `cosplayxclusive.com/${username}`
   const fontSize = Math.max(14, Math.round(width * 0.028))
   const approxTextW = Math.round(label.length * fontSize * 0.55)
   const approxTextH = Math.round(fontSize * 1.4)
