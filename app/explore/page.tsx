@@ -42,6 +42,21 @@ export default async function ExplorePage() {
     .select('id, username, display_name, bio, avatar_url, subscription_price_usd, fandom_tags, created_at')
     .eq('creator_status', 'approved')
 
+  // Active subscriptions for the current viewer so the card can show
+  // "Subscribed" instead of the price/Free badge.
+  let subscribedIds: string[] = []
+  if (user) {
+    const nowIso = new Date().toISOString()
+    const { data: subs } = await supabase
+      .from('subscriptions')
+      .select('creator_id, current_period_end')
+      .eq('fan_id', user.id)
+      .eq('status', 'active')
+    subscribedIds = (subs ?? [])
+      .filter((s) => s.current_period_end == null || s.current_period_end > nowIso)
+      .map((s) => s.creator_id)
+  }
+
   return (
     <div className="min-h-screen bg-bg-base flex flex-col">
       <Nav profile={viewerProfile} />
@@ -61,7 +76,7 @@ export default async function ExplorePage() {
             <p className="text-sm mt-2">Be the first to join as a creator!</p>
           </div>
         ) : (
-          <CreatorsFilter creators={creators} />
+          <CreatorsFilter creators={creators} subscribedIds={subscribedIds} />
         )}
       </main>
 

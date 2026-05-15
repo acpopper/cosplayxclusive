@@ -19,7 +19,14 @@ type CreatorPreview = Pick<
   'id' | 'username' | 'display_name' | 'bio' | 'avatar_url' | 'subscription_price_usd' | 'fandom_tags' | 'created_at'
 >
 
-export function CreatorsFilter({ creators }: { creators: CreatorPreview[] }) {
+export function CreatorsFilter({
+  creators,
+  subscribedIds = [],
+}: {
+  creators: CreatorPreview[]
+  subscribedIds?: string[]
+}) {
+  const subscribedSet = useMemo(() => new Set(subscribedIds), [subscribedIds])
   const [search, setSearch] = useState('')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [sort, setSort] = useState<SortOption>('newest')
@@ -142,7 +149,11 @@ export function CreatorsFilter({ creators }: { creators: CreatorPreview[] }) {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((creator) => (
-            <CreatorCard key={creator.id} creator={creator} />
+            <CreatorCard
+              key={creator.id}
+              creator={creator}
+              subscribed={subscribedSet.has(creator.id)}
+            />
           ))}
         </div>
       )}
@@ -150,7 +161,7 @@ export function CreatorsFilter({ creators }: { creators: CreatorPreview[] }) {
   )
 }
 
-function CreatorCard({ creator }: { creator: CreatorPreview }) {
+function CreatorCard({ creator, subscribed }: { creator: CreatorPreview; subscribed: boolean }) {
   return (
     <Link
       href={`/${creator.username}`}
@@ -180,11 +191,17 @@ function CreatorCard({ creator }: { creator: CreatorPreview }) {
           <p className="font-semibold text-text-primary truncate">
             {creator.display_name || creator.username}
           </p>
-          <span className="text-xs text-accent font-medium flex-shrink-0">
-            {creator.subscription_price_usd === 0
-              ? 'Free'
-              : `$${creator.subscription_price_usd}/mo`}
-          </span>
+          {subscribed ? (
+            <span className="text-xs flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-success/10 text-success border border-success/20 font-medium">
+              ✓ Subscribed
+            </span>
+          ) : (
+            <span className="text-xs text-accent font-medium flex-shrink-0">
+              {creator.subscription_price_usd === 0
+                ? 'Free'
+                : `$${creator.subscription_price_usd}/mo`}
+            </span>
+          )}
         </div>
         <p className="text-xs text-text-secondary mb-2">@{creator.username}</p>
 

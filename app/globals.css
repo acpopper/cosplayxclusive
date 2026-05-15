@@ -64,3 +64,16 @@ input:-webkit-autofill:focus {
   -webkit-text-fill-color: #f5f5f7;
   caret-color: #f5f5f7;
 }
+
+/*
+ * Prevent iOS Safari from auto-zooming when an input is focused.
+ * iOS zooms when an editable element has computed font-size < 16px; force
+ * 16px on phones only so the desktop typography is untouched.
+ */
+@media (max-width: 768px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}

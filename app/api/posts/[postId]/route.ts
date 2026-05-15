@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import sharp from 'sharp'
+import { normalizeImageInput } from '@/lib/image-normalize'
 
 type RouteContext = { params: Promise<{ postId: string }> }
 
@@ -117,14 +118,14 @@ export async function PATCH(request: NextRequest, ctx: RouteContext) {
     if (type === 'image') {
       const file = newImageFiles[imageIdx++]
       if (!file) continue
-      const ext = file.name.split('.').pop()
-      const path = `${user.id}/${base}_edit_${i}.${ext}`
       const rawBuffer = Buffer.from(await file.arrayBuffer())
-      const buffer = await applyWatermark(rawBuffer, username)
+      const normalized = await normalizeImageInput(rawBuffer, file)
+      const path = `${user.id}/${base}_edit_${i}.${normalized.ext}`
+      const buffer = await applyWatermark(normalized.buffer, username)
 
       const { error: origErr } = await service.storage
         .from('originals')
-        .upload(path, buffer, { contentType: file.type, upsert: false })
+        .upload(path, buffer, { contentType: normalized.contentType, upsert: false })
 
       if (!origErr) {
         newMediaPaths.push(path)

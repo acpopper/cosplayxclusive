@@ -197,7 +197,11 @@ export default async function ChatPage(props: PageProps<'/messages/[conversation
     role: viewerProfile!.role,
   }
 
-  const canSendMedia =
+  // Anyone in the conversation can attach images. Only approved creators (and
+  // admins) can put a PPV price on them — that's enforced server-side and the
+  // price input is hidden for fans in the client.
+  const canSendMedia = true
+  const canPricePpv =
     viewerProfile!.creator_status === 'approved' || viewerProfile!.role === 'admin'
 
   const { data: favoriteRow } = await supabase
@@ -214,6 +218,7 @@ export default async function ChatPage(props: PageProps<'/messages/[conversation
       currentUserProfile={currentUserProfile}
       otherProfile={otherProfile ?? null}
       canSendMedia={canSendMedia}
+      canPricePpv={canPricePpv}
       initialFavorite={!!favoriteRow}
     />
   )

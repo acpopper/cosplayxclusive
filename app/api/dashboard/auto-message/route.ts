@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { checkImageContent } from '@/lib/sightengine'
+import { checkAndSuspendForNsfw } from '@/lib/nsfw-strikes'
+import { normalizeImageInput } from '@/lib/image-normalize'
 
 const BUCKET = 'previews'
 const MEDIA_PREFIX = 'chat-media'
@@ -62,17 +64,17 @@ export async function POST(request: NextRequest) {
 
   for (let i = 0; i < filesToUpload.length; i++) {
     const file = filesToUpload[i]
-    const ext = file.name.split('.').pop() ?? 'jpg'
-    const path = `${MEDIA_PREFIX}/${user.id}/${type}/${Date.now()}_${i}.${ext}`
-    const buffer = Buffer.from(await file.arrayBuffer())
+    const rawBuffer = Buffer.from(await file.arrayBuffer())
+    const normalized = await normalizeImageInput(rawBuffer, file)
+    const path = `${MEDIA_PREFIX}/${user.id}/${type}/${Date.now()}_${i}.${normalized.ext}`
 
     // Run SightEngine check in parallel with upload
     const [, flagResult] = await Promise.allSettled([
       service.storage
         .from(BUCKET)
-        .upload(path, buffer, { contentType: file.type, upsert: false })
+        .upload(path, normalized.buffer, { contentType: normalized.contentType, upsert: false })
         .then(({ error }) => { if (!error) newPaths.push(path) }),
-      checkImageContent(buffer, file.type),
+      checkImageContent(normalized.buffer, normalized.contentType),
     ])
 
     if (flagResult.status === 'fulfilled' && flagResult.value.flagged) {
@@ -118,6 +120,11 @@ export async function POST(request: NextRequest) {
         detection_scores:   f.scores,
       })),
     )
+
+    const highConfidence = pendingFlags.some((f) => f.maxScore >= 0.9)
+    if (highConfidence) {
+      await checkAndSuspendForNsfw(service, user.id)
+    }
   }
 
   return NextResponse.json({ ok: true, mediaPaths })

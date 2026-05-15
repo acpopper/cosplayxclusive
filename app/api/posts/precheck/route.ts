@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { checkImageContent } from '@/lib/sightengine'
+import { normalizeImageInput } from '@/lib/image-normalize'
 
 /**
  * Pre-upload nudity check for the post creator. The form calls this with the
@@ -35,8 +36,9 @@ export async function POST(request: NextRequest) {
   const results = await Promise.all(
     files.map(async (file, index) => {
       try {
-        const buffer = Buffer.from(await file.arrayBuffer())
-        const result = await checkImageContent(buffer, file.type)
+        const rawBuffer  = Buffer.from(await file.arrayBuffer())
+        const normalized = await normalizeImageInput(rawBuffer, file)
+        const result     = await checkImageContent(normalized.buffer, normalized.contentType)
         return {
           index,
           flagged:    result.flagged,

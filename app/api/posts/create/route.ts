@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import sharp from 'sharp'
 import { checkImageContent, type ContentFlagResult } from '@/lib/sightengine'
+import { checkAndSuspendForNsfw } from '@/lib/nsfw-strikes'
+import { normalizeImageInput } from '@/lib/image-normalize'
 import { getPostHogClient } from '@/lib/posthog-server'
 
 interface PrecheckResult {
@@ -146,9 +148,13 @@ export async function POST(request: NextRequest) {
       const fileIndex = imageIdx
       const file = imageFiles[imageIdx++]
       if (!file) continue
-      const ext = file.name.split('.').pop()
-      const path = `${user.id}/${base}_${i}.${ext}`
       const rawBuffer = Buffer.from(await file.arrayBuffer())
+
+      // HEIC inputs (iPhone) are transcoded to JPEG here so downstream
+      // consumers — Sightengine, browsers, sharp's preview pipeline — all see
+      // a format they support.
+      const normalized = await normalizeImageInput(rawBuffer, file)
+      const path = `${user.id}/${base}_${i}.${normalized.ext}`
 
       // Use precheck results if the client already screened this image,
       // otherwise call SightEngine here (in parallel with watermarking).
@@ -160,12 +166,12 @@ export async function POST(request: NextRequest) {
             maxScore:   cached.maxScore,
             scores:     cached.scores,
           }
-        : await checkImageContent(rawBuffer, file.type)
-      const buffer = await applyWatermark(rawBuffer, profile.username)
+        : await checkImageContent(normalized.buffer, normalized.contentType)
+      const buffer = await applyWatermark(normalized.buffer, profile.username)
 
       const { error: origErr } = await service.storage
         .from('originals')
-        .upload(path, buffer, { contentType: file.type, cacheControl: '3600', upsert: false })
+        .upload(path, buffer, { contentType: normalized.contentType, cacheControl: '3600', upsert: false })
 
       if (origErr) {
         return NextResponse.json({ error: `Failed to upload image: ${origErr.message}` }, { status: 500 })
@@ -293,6 +299,13 @@ export async function POST(request: NextRequest) {
         detection_scores:   f.scores,
       })),
     )
+
+    // After persisting, check if this creator has crossed the high-confidence
+    // strike limit and auto-suspend them if so.
+    const highConfidence = pendingFlags.some((f) => f.maxScore >= 0.9)
+    if (highConfidence) {
+      await checkAndSuspendForNsfw(service, user.id)
+    }
   }
 
   return NextResponse.json({ ok: true })

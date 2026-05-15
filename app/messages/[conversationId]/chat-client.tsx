@@ -44,6 +44,7 @@ interface ChatClientProps {
   currentUserProfile: SenderProfile
   otherProfile: SenderProfile | null
   canSendMedia: boolean
+  canPricePpv: boolean
   initialFavorite: boolean
 }
 
@@ -161,6 +162,7 @@ export function ChatClient({
   currentUserProfile,
   otherProfile,
   canSendMedia,
+  canPricePpv,
   initialFavorite,
 }: ChatClientProps) {
   const router = useRouter()
@@ -923,8 +925,8 @@ export function ChatClient({
                     </div>
                   )}
 
-                  {/* Hover actions */}
-                  <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                  {/* Action buttons — always visible on touch (no hover), reveal-on-hover on desktop */}
+                  <div className="flex items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100 transition-opacity">
                     <button
                       type="button"
                       onClick={() => startReply(msg)}
@@ -1043,24 +1045,26 @@ export function ChatClient({
               ))}
             </div>
 
-            {/* PPV price input — creator only, optional. Empty = free media. */}
-            <label className="flex items-center gap-2 text-xs text-text-secondary">
-              <span className="font-medium">Price (optional)</span>
-              <span className="relative">
-                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-text-muted">$</span>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min="1"
-                  step="0.01"
-                  placeholder="Free"
-                  value={pendingPriceRaw}
-                  onChange={(e) => setPendingPriceRaw(e.target.value)}
-                  className="w-24 pl-5 pr-2 py-1 rounded-lg border border-border bg-bg-elevated text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors"
-                />
-              </span>
-              <span className="text-text-muted">— charge to unlock</span>
-            </label>
+            {/* PPV price input — creator/admin only, optional. Empty = free media. */}
+            {canPricePpv && (
+              <label className="flex items-center gap-2 text-xs text-text-secondary">
+                <span className="font-medium">Price (optional)</span>
+                <span className="relative">
+                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-text-muted">$</span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="1"
+                    step="0.01"
+                    placeholder="Free"
+                    value={pendingPriceRaw}
+                    onChange={(e) => setPendingPriceRaw(e.target.value)}
+                    className="w-24 pl-5 pr-2 py-1 rounded-lg border border-border bg-bg-elevated text-base text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors"
+                  />
+                </span>
+                <span className="text-text-muted">— charge to unlock</span>
+              </label>
+            )}
           </div>
         )}
 

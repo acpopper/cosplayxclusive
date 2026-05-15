@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import sharp from 'sharp'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { checkImageContent } from '@/lib/sightengine'
+import { checkAndSuspendForNsfw } from '@/lib/nsfw-strikes'
+import { normalizeImageInput } from '@/lib/image-normalize'
 
 const BUCKET_PREVIEW = 'previews'
 const BUCKET_ORIGINAL = 'originals'
@@ -19,7 +21,7 @@ async function makeBlurredPreview(buffer: Buffer): Promise<Buffer> {
 async function applyWatermark(buffer: Buffer, username: string): Promise<Buffer> {
   const image = sharp(buffer)
   const { width = 800, height = 600 } = await image.metadata()
-  const label       = `cosplayxclusive.com/@${username}`
+  const label       = `cosplayxclusive.com/${username}`
   const fontSize    = Math.max(14, Math.round(width * 0.028))
   const approxTextW = Math.round(label.length * fontSize * 0.55)
   const approxTextH = Math.round(fontSize * 1.4)
@@ -55,9 +57,12 @@ export async function POST(request: NextRequest) {
     .eq('id', user.id)
     .single()
 
-  if (!profile || (profile.creator_status !== 'approved' && profile.role !== 'admin')) {
-    return NextResponse.json({ error: 'Only approved creators can send media' }, { status: 403 })
+  if (!profile) {
+    return NextResponse.json({ error: 'Profile not found' }, { status: 403 })
   }
+
+  const isApprovedCreator = profile.creator_status === 'approved'
+  const isAdmin           = profile.role === 'admin'
 
   const formData = await request.formData()
   const conversationId = formData.get('conversationId') as string | null
@@ -67,10 +72,14 @@ export async function POST(request: NextRequest) {
   const replyToId = replyToIdRaw && /^[0-9a-f-]{36}$/i.test(replyToIdRaw) ? replyToIdRaw : null
   const files = formData.getAll('files') as File[]
 
-  // PPV pricing — optional, creator-set. Empty/0 means free media.
+  // PPV pricing — creator/admin only. Fans can only send free media; their
+  // price input (if any) is silently ignored rather than rejected.
   const priceRaw = (formData.get('price_usd') as string | null)?.trim() ?? ''
   const priceParsed = priceRaw ? parseFloat(priceRaw) : 0
-  const priceUsd = Number.isFinite(priceParsed) && priceParsed >= 1 ? priceParsed : 0
+  const priceUsd =
+    (isApprovedCreator || isAdmin) && Number.isFinite(priceParsed) && priceParsed >= 1
+      ? priceParsed
+      : 0
   const isPpv = priceUsd >= 1
 
   if (!conversationId) {
@@ -100,12 +109,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Not a participant of this conversation' }, { status: 403 })
   }
 
-  // Run Sightengine on every image up front (parallel with reading buffers).
+  // Normalise HEIC (iPhone) inputs to JPEG up front, then run Sightengine on
+  // the normalized bytes so we never send a format the API doesn't support.
   const checks = await Promise.all(
     files.map(async (file, index) => {
-      const buffer = Buffer.from(await file.arrayBuffer())
-      const result = await checkImageContent(buffer, file.type)
-      return { index, file, buffer, result }
+      const rawBuffer  = Buffer.from(await file.arrayBuffer())
+      const normalized = await normalizeImageInput(rawBuffer, file)
+      const result     = await checkImageContent(normalized.buffer, normalized.contentType)
+      return { index, file, buffer: normalized.buffer, contentType: normalized.contentType, ext: normalized.ext, result }
     }),
   )
 
@@ -138,10 +149,9 @@ export async function POST(request: NextRequest) {
   const base = Date.now()
 
   for (const c of checks) {
-    const ext = c.file.name.split('.').pop() ?? 'jpg'
     const slot = `${MEDIA_PREFIX}/${user.id}/${conversationId}/${base}_${c.index}`
     const previewPath  = `${slot}_preview.jpg`
-    const originalPath = `${slot}.${ext}`
+    const originalPath = `${slot}.${c.ext}`
 
     if (isPpv) {
       // Dual upload: blurred preview in public bucket + watermarked original in private bucket.
@@ -149,7 +159,7 @@ export async function POST(request: NextRequest) {
       const blurred     = await makeBlurredPreview(c.buffer)
 
       const [origUp, prevUp] = await Promise.all([
-        service.storage.from(BUCKET_ORIGINAL).upload(originalPath, watermarked, { contentType: c.file.type, upsert: false }),
+        service.storage.from(BUCKET_ORIGINAL).upload(originalPath, watermarked, { contentType: c.contentType, upsert: false }),
         service.storage.from(BUCKET_PREVIEW) .upload(previewPath,  blurred,     { contentType: 'image/jpeg', upsert: false }),
       ])
       if (origUp.error || prevUp.error) {
@@ -172,7 +182,7 @@ export async function POST(request: NextRequest) {
       // Free chat media — keep the legacy single-bucket flow (public previews).
       const { error: upErr } = await service.storage
         .from(BUCKET_PREVIEW)
-        .upload(originalPath, c.buffer, { contentType: c.file.type, upsert: false })
+        .upload(originalPath, c.buffer, { contentType: c.contentType, upsert: false })
       if (upErr) {
         return NextResponse.json({ error: `Upload failed: ${upErr.message}` }, { status: 500 })
       }
@@ -225,6 +235,13 @@ export async function POST(request: NextRequest) {
         detection_scores:   f.scores,
       })),
     )
+
+    // Only count creators against the strike limit. A flagged image from a
+    // fan still lands in the moderation queue but doesn't risk suspending them.
+    const highConfidence = pendingFlags.some((f) => f.maxScore >= 0.9)
+    if (highConfidence && (isApprovedCreator || isAdmin)) {
+      await checkAndSuspendForNsfw(service, user.id)
+    }
   }
 
   return NextResponse.json({
