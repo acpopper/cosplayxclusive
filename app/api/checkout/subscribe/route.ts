@@ -146,29 +146,52 @@ export async function POST(request: NextRequest) {
     const priceInCents = Math.round(creator.subscription_price_usd * 100)
     const applicationFeePercent = getPlatformFeePercent(creator.platform_fee_percent)
 
-    const price = await stripe.prices.create(
-      {
-        unit_amount: priceInCents,
-        currency: 'usd',
-        recurring: { interval: 'month' },
-        product_data: {
-          name: `${creator.display_name || creator.username} — Monthly Subscription`,
+    // Reuse the cached Price when the creator hasn't changed their monthly
+    // amount. Otherwise create a new Price on the creator's account and
+    // remember it so the next subscriber gets the cached path.
+    let priceId: string | null = null
+    if (
+      creator.stripe_price_id
+      && typeof creator.stripe_price_amount_cents === 'number'
+      && creator.stripe_price_amount_cents === priceInCents
+    ) {
+      priceId = creator.stripe_price_id
+    }
+
+    if (!priceId) {
+      const price = await stripe.prices.create(
+        {
+          unit_amount: priceInCents,
+          currency: 'usd',
+          recurring: { interval: 'month' },
+          product_data: {
+            name: `${creator.display_name || creator.username} — Monthly Subscription`,
+          },
         },
-      },
-      { stripeAccount },
-    )
+        { stripeAccount },
+      )
+      priceId = price.id
+
+      const service = createServiceClient()
+      await service
+        .from('profiles')
+        .update({
+          stripe_price_id:           price.id,
+          stripe_price_amount_cents: priceInCents,
+        })
+        .eq('id', creatorId)
+    }
 
     const subscription = await stripe.subscriptions.create(
       {
         customer: customer.id,
-        items: [{ price: price.id }],
+        items: [{ price: priceId }],
         application_fee_percent: applicationFeePercent,
         payment_behavior: 'default_incomplete',
         payment_settings: {
           save_default_payment_method: 'on_subscription',
-          payment_method_types: ['card'],
         },
-        expand: ['latest_invoice.confirmation_secret', 'latest_invoice.payment_intent'],
+        expand: ['latest_invoice.confirmation_secret'],
         metadata: {
           fan_id: user.id,
           creator_id: creatorId,
@@ -177,20 +200,12 @@ export async function POST(request: NextRequest) {
       { stripeAccount },
     )
 
-    // Stripe v22: latest_invoice.confirmation_secret is the new home for the
-    // client secret used by Elements. We also fall back to payment_intent for
-    // older API versions / regional differences.
+    // latest_invoice.confirmation_secret is the canonical client_secret for
+    // Elements on API 2025-08-27+ (we're on 2026-03-25).
     const invoice = subscription.latest_invoice as
-      | (Stripe.Invoice & {
-          confirmation_secret?: { client_secret: string }
-          payment_intent?: string | Stripe.PaymentIntent | null
-        })
+      | (Stripe.Invoice & { confirmation_secret?: { client_secret: string } })
       | null
-    const clientSecret =
-      invoice?.confirmation_secret?.client_secret
-      ?? (typeof invoice?.payment_intent === 'object'
-        ? invoice?.payment_intent?.client_secret
-        : null)
+    const clientSecret = invoice?.confirmation_secret?.client_secret ?? null
 
     if (!clientSecret) {
       console.error('[checkout/subscribe] no client secret on incomplete sub', subscription.id)

@@ -84,6 +84,33 @@ async function getCardFromCharge(
 export async function handleStripeEvent(event: Stripe.Event): Promise<void> {
   const supabase = getServiceClient()
 
+  // Idempotency: claim event.id before doing any side effects. Stripe can
+  // deliver the same event more than once (retries, multiple Dashboard
+  // endpoints, overlapping `stripe listen` sessions). The unique PK on
+  // processed_stripe_events.event_id means a second delivery returns no rows
+  // and we bail out before re-sending emails / re-inserting transactions.
+  const { data: claimed, error: claimError } = await supabase
+    .from('processed_stripe_events')
+    .insert({ event_id: event.id })
+    .select('event_id')
+    .maybeSingle()
+
+  if (claimError) {
+    // Postgres unique_violation = 23505. Treat as "already processed".
+    if (claimError.code === '23505') {
+      console.log(`[webhook] event ${event.id} already processed, skipping`)
+      return
+    }
+    // Any other DB error (RLS, connectivity) — log and bail rather than
+    // double-processing.
+    console.error('[webhook] could not claim event for idempotency:', claimError)
+    throw claimError
+  }
+  if (!claimed) {
+    console.log(`[webhook] event ${event.id} already processed, skipping`)
+    return
+  }
+
   switch (event.type) {
     case 'payment_intent.succeeded': {
       await handlePaymentIntentSucceeded(supabase, event)
