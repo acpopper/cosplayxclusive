@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
+import { MIN_PPV_USD } from '@/lib/ppv-pricing'
 import type { AccessType } from '@/lib/types'
 
 const ACCESS_OPTIONS: { value: AccessType; label: string; desc: string }[] = [
@@ -114,68 +115,100 @@ export function EditPostForm({
     if (totalItems === 0) { setError('A post must have at least one image or video.'); return }
     if (accessType === 'ppv') {
       const price = parseFloat(ppvPrice)
-      if (isNaN(price) || price < 1) { setError('PPV price must be at least $1.00'); return }
+      if (isNaN(price) || price < MIN_PPV_USD) {
+        setError(`PPV price must be at least $${MIN_PPV_USD.toFixed(2)}`)
+        return
+      }
     }
 
     setError('')
     setLoading(true)
 
     try {
+      // Upload each new media item (image or video) directly to Supabase via
+      // a signed URL — the server only sees paths, never bytes. Same flow as
+      // the new-post form so we share the 4.5 MB workaround.
       const supabase = createClient()
-      const videoNewItems = newItems.filter(item => item.type === 'video')
-      const uploadedVideoPaths: string[] = []
-      const videoThumbs: (Blob | null)[] = []
+      const imagePaths:      string[] = []
+      const videoPaths:      string[] = []
+      const videoThumbPaths: string[] = []
 
-      if (videoNewItems.length > 0) {
-        for (let vi = 0; vi < videoNewItems.length; vi++) {
-          const item = videoNewItems[vi]
-          setProgress(`Uploading video ${vi + 1} of ${videoNewItems.length}…`)
+      for (let i = 0; i < newItems.length; i++) {
+        const item = newItems[i]
+        setProgress(`Uploading ${item.type} ${i + 1} of ${newItems.length}…`)
 
-          const urlRes = await fetch('/api/posts/upload-url', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filename: item.file.name, contentType: item.file.type }),
-          })
-          if (!urlRes.ok) throw new Error('Failed to get upload URL')
-          const { path, token } = await urlRes.json()
+        const urlRes = await fetch('/api/posts/upload-url', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            filename:    item.file.name,
+            contentType: item.file.type,
+            bucket:      'originals',
+          }),
+        })
+        if (!urlRes.ok) throw new Error('Failed to get upload URL')
+        const { path, token } = await urlRes.json() as { path: string; token: string }
 
-          const { error: uploadErr } = await supabase.storage
-            .from('originals')
-            .uploadToSignedUrl(path, token, item.file, { contentType: item.file.type })
-          if (uploadErr) throw new Error(`Failed to upload video: ${uploadErr.message}`)
+        const { error: uploadErr } = await supabase.storage
+          .from('originals')
+          .uploadToSignedUrl(path, token, item.file, { contentType: item.file.type })
+        if (uploadErr) throw new Error(`Upload failed: ${uploadErr.message}`)
 
-          uploadedVideoPaths.push(path)
-          videoThumbs.push(await captureVideoThumbnail(item.file))
+        if (item.type === 'image') {
+          imagePaths.push(path)
+        } else {
+          videoPaths.push(path)
+
+          setProgress(`Preparing video ${i + 1} thumbnail…`)
+          const thumb = await captureVideoThumbnail(item.file)
+          if (thumb) {
+            const thumbUrlRes = await fetch('/api/posts/upload-url', {
+              method:  'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body:    JSON.stringify({
+                filename:    'thumb.jpg',
+                contentType: 'image/jpeg',
+                bucket:      'previews',
+              }),
+            })
+            if (thumbUrlRes.ok) {
+              const { path: thumbPath, token: thumbToken } = await thumbUrlRes.json() as { path: string; token: string }
+              const { error: thumbErr } = await supabase.storage
+                .from('previews')
+                .uploadToSignedUrl(thumbPath, thumbToken, thumb, { contentType: 'image/jpeg' })
+              if (!thumbErr) {
+                videoThumbPaths.push(thumbPath)
+              } else {
+                videoThumbPaths.push('')
+              }
+            } else {
+              videoThumbPaths.push('')
+            }
+          } else {
+            videoThumbPaths.push('')
+          }
         }
       }
 
       setProgress('Saving changes…')
-      const fd = new FormData()
-      fd.append('caption', caption)
-      fd.append('access_type', accessType)
-      if (accessType === 'ppv') fd.append('price_usd', ppvPrice)
-      fd.append('keepMediaPaths', JSON.stringify(keptMediaPaths))
-      fd.append('keepPreviewPaths', JSON.stringify(keptPreviewPaths))
-      fd.append('keepMediaTypes', JSON.stringify(keptMediaTypes))
-
-      const mediaOrder = newItems.map(item => item.type)
-      fd.append('mediaOrder', JSON.stringify(mediaOrder))
-
-      let videoOrderIdx = 0
-      for (const item of newItems) {
-        if (item.type === 'image') {
-          fd.append('files', item.file)
-        } else {
-          fd.append('videoPaths', uploadedVideoPaths[videoOrderIdx])
-          const thumb = videoThumbs[videoOrderIdx]
-          if (thumb) fd.append('videoThumbs', thumb, 'thumb.jpg')
-          videoOrderIdx++
-        }
+      const body = {
+        caption,
+        access_type:     accessType,
+        price_usd:       accessType === 'ppv' ? parseFloat(ppvPrice) : null,
+        keepMediaPaths:  keptMediaPaths,
+        keepPreviewPaths: keptPreviewPaths,
+        keepMediaTypes:  keptMediaTypes,
+        mediaOrder:      newItems.map(item => item.type),
+        imagePaths,
+        videoPaths,
+        videoThumbPaths: videoThumbPaths.filter((p) => p !== ''),
       }
 
-      const res = await fetch(`/api/posts/${postId}`, { method: 'PATCH', body: fd })
-      // Defensive parse — slow uploads can return empty bodies after a timeout
-      // even when the update succeeded server-side.
+      const res = await fetch(`/api/posts/${postId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      })
       const raw = await res.text()
       let data: { error?: string } = {}
       if (raw) {
@@ -303,12 +336,12 @@ export function EditPostForm({
 
       {accessType === 'ppv' && (
         <Input
-          label="PPV Price (USD)"
+          label={`PPV Price (USD) — min $${MIN_PPV_USD.toFixed(2)}`}
           type="number"
-          placeholder="5.99"
+          placeholder={MIN_PPV_USD.toFixed(2)}
           value={ppvPrice}
           onChange={(e) => setPpvPrice(e.target.value)}
-          min="1"
+          min={MIN_PPV_USD.toString()}
           max="999"
           step="0.01"
         />

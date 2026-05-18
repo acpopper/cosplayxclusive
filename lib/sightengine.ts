@@ -1,4 +1,46 @@
+import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+
 const SIGHTENGINE_URL = 'https://api.sightengine.com/1.0/check.json'
+
+export type SightengineSource =
+  | 'post_precheck'
+  | 'post_create'
+  | 'message'
+  | 'auto_message'
+  | 'unknown'
+
+export interface SightengineContext {
+  userId?: string | null
+  source:  SightengineSource
+}
+
+async function logSightengineUsage(
+  context: SightengineContext | undefined,
+  contentType: string,
+  bytes: number,
+  result: { succeeded: boolean; flagged: boolean; maxScore: number },
+): Promise<void> {
+  // Fire-and-forget audit row. Uses the service role because the table is
+  // admin-only under RLS. We swallow errors entirely — usage logging must
+  // never break a moderation check.
+  try {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+    if (!url || !key) return
+    const supabase = createSupabaseClient(url, key)
+    await supabase.from('sightengine_usage').insert({
+      user_id:      context?.userId ?? null,
+      source:       context?.source ?? 'unknown',
+      succeeded:    result.succeeded,
+      max_score:    result.succeeded ? Number(result.maxScore.toFixed(3)) : null,
+      flagged:      result.flagged,
+      bytes,
+      content_type: contentType,
+    })
+  } catch (err) {
+    console.error('[sightengine] usage log insert failed:', err)
+  }
+}
 
 // Intensity classes — these are hierarchical: triggering one implies all weaker
 // ones are also present. Threshold tuned per class.
@@ -116,6 +158,7 @@ const EMPTY: ContentFlagResult = { flagged: false, categories: [], maxScore: 0, 
 export async function checkImageContent(
   buffer: Buffer,
   contentType: string,
+  context?: SightengineContext,
 ): Promise<ContentFlagResult> {
   const apiUser   = process.env.SIGHTENGINE_API_USER
   const apiSecret = process.env.SIGHTENGINE_API_SECRET
@@ -149,7 +192,10 @@ export async function checkImageContent(
     const rawText = await res.text()
     console.log(`[sightengine] status=${res.status} body=${rawText.slice(0, 2000)}`)
 
-    if (!res.ok) return EMPTY
+    if (!res.ok) {
+      await logSightengineUsage(context, contentType, buffer.length, { succeeded: false, flagged: false, maxScore: 0 })
+      return EMPTY
+    }
 
     let data: {
       status?:           string
@@ -162,10 +208,12 @@ export async function checkImageContent(
       data = JSON.parse(rawText)
     } catch (err) {
       console.error('[sightengine] failed to parse response JSON', err)
+      await logSightengineUsage(context, contentType, buffer.length, { succeeded: false, flagged: false, maxScore: 0 })
       return EMPTY
     }
     if (data.status !== 'success') {
       console.warn('[sightengine] non-success response', { status: data.status })
+      await logSightengineUsage(context, contentType, buffer.length, { succeeded: false, flagged: false, maxScore: 0 })
       return EMPTY
     }
 
@@ -215,10 +263,13 @@ export async function checkImageContent(
     }
 
     console.log('[sightengine] result', { flagged: categories.length > 0, categories, maxScore })
-    return { flagged: categories.length > 0, categories, maxScore, scores }
+    const flagged = categories.length > 0
+    await logSightengineUsage(context, contentType, buffer.length, { succeeded: true, flagged, maxScore })
+    return { flagged, categories, maxScore, scores }
   } catch (err) {
     clearTimeout(timer)
     console.error('[sightengine] request failed', err)
+    await logSightengineUsage(context, contentType, buffer.length, { succeeded: false, flagged: false, maxScore: 0 })
     return EMPTY
   }
 }

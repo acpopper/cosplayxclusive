@@ -3,16 +3,16 @@
 import { useState } from 'react'
 import {
   EMAIL_CATEGORIES,
-  TOGGLEABLE_CATEGORIES,
   type EmailCategory,
   type EmailPreferencesRow,
 } from '@/lib/email-categories'
 
 interface NotificationsFormProps {
-  initial: EmailPreferencesRow
+  initial:      EmailPreferencesRow
+  categoryKeys: EmailCategory[]
 }
 
-export function NotificationsForm({ initial }: NotificationsFormProps) {
+export function NotificationsForm({ initial, categoryKeys }: NotificationsFormProps) {
   const [prefs, setPrefs]     = useState<EmailPreferencesRow>(initial)
   const [saving, setSaving]   = useState(false)
   const [savedAt, setSavedAt] = useState<number | null>(null)
@@ -48,12 +48,12 @@ export function NotificationsForm({ initial }: NotificationsFormProps) {
         </span>
       </div>
       <p className="text-xs text-text-muted mb-4">
-        Control activity, summary, and marketing emails.
+        Activity emails for your account. Toggle off anything you don&apos;t want.
       </p>
 
       <ul className="flex flex-col divide-y divide-border">
-        {TOGGLEABLE_CATEGORIES.map((key) => {
-          const meta = EMAIL_CATEGORIES[key as EmailCategory]
+        {categoryKeys.map((key) => {
+          const meta    = EMAIL_CATEGORIES[key]
           const enabled = prefs[key]
           return (
             <li key={key} className="flex items-start gap-4 py-3 first:pt-0 last:pb-0">
@@ -61,25 +61,12 @@ export function NotificationsForm({ initial }: NotificationsFormProps) {
                 <p className="text-sm font-medium text-text-primary">{meta.label}</p>
                 <p className="text-xs text-text-muted">{meta.description}</p>
               </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={enabled}
-                aria-label={`Toggle ${meta.label}`}
-                onClick={() => toggle(key)}
+              <Switch
+                checked={enabled}
+                onChange={() => toggle(key)}
                 disabled={saving}
-                className={[
-                  'relative h-6 w-11 flex-shrink-0 rounded-full transition-colors disabled:opacity-50',
-                  enabled ? 'bg-accent' : 'bg-bg-elevated border border-border',
-                ].join(' ')}
-              >
-                <span
-                  className={[
-                    'absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform',
-                    enabled ? 'translate-x-[22px]' : 'translate-x-0.5',
-                  ].join(' ')}
-                />
-              </button>
+                label={meta.label}
+              />
             </li>
           )
         })}
@@ -93,5 +80,45 @@ export function NotificationsForm({ initial }: NotificationsFormProps) {
         suppression list and we&apos;ll stop sending entirely.
       </p>
     </section>
+  )
+}
+
+// Geometry: 44×24 track with 2px padding on every side → 40×20 inner area.
+// 20×20 thumb slides 0→20px so its right edge lands flush at the right side
+// of the inner area. Track has a transparent 1px border in both states so the
+// thumb doesn't shift vertically when the active background turns on/off.
+function Switch({
+  checked,
+  onChange,
+  disabled,
+  label,
+}: {
+  checked:  boolean
+  onChange: () => void
+  disabled: boolean
+  label:    string
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={`Toggle ${label}`}
+      onClick={onChange}
+      disabled={disabled}
+      className={[
+        'relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full p-0.5',
+        'border border-transparent transition-colors disabled:opacity-50',
+        checked ? 'bg-accent' : 'bg-bg-elevated border-border',
+      ].join(' ')}
+    >
+      <span
+        className={[
+          'block h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-150',
+          checked ? 'translate-x-5' : 'translate-x-0',
+        ].join(' ')}
+        aria-hidden="true"
+      />
+    </button>
   )
 }

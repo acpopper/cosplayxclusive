@@ -10,11 +10,21 @@ export default async function PostsPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('stripe_charges_enabled')
+    .eq('id', user.id)
+    .single()
+
+  const stripeReady = !!profile?.stripe_charges_enabled
+
   const { data: posts } = await supabase
     .from('posts')
     .select('*')
     .eq('creator_id', user.id)
     .order('published_at', { ascending: false })
+
+  const draftCount = (posts ?? []).filter((p) => p.published === false).length
 
   // Generate signed URLs to the (watermarked, non-blurred) originals so the
   // creator sees their own posts unblurred on their dashboard. Video posts
@@ -60,6 +70,30 @@ export default async function PostsPage() {
           <Button size="md">+ New Post</Button>
         </Link>
       </div>
+
+      {!stripeReady && (
+        <div className="rounded-xl border border-warning/20 bg-warning/5 p-4 flex items-start gap-3">
+          <span className="text-xl">💳</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-warning">
+              {draftCount > 0
+                ? `${draftCount} ${draftCount === 1 ? 'draft is' : 'drafts are'} waiting on Stripe`
+                : 'Connect Stripe to start publishing'}
+            </p>
+            <p className="text-xs text-text-muted mt-1">
+              {draftCount > 0
+                ? 'New posts stay unpublished until you finish Stripe onboarding. Once you connect, publish them from this list.'
+                : 'You can draft posts now, but they won’t be visible to fans until your Stripe account is set up to receive payouts.'}
+            </p>
+            <Link
+              href="/dashboard/connect"
+              className="inline-block mt-2 text-xs font-semibold text-accent hover:text-accent-hover transition-colors"
+            >
+              Connect Stripe →
+            </Link>
+          </div>
+        </div>
+      )}
 
       {!posts || posts.length === 0 ? (
         <div className="text-center py-16 bg-bg-card border border-border rounded-2xl text-text-muted">

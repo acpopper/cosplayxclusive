@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { setFlash } from '@/lib/flash'
+import { MIN_PPV_USD } from '@/lib/ppv-pricing'
 import type { AccessType } from '@/lib/types'
 
 const FLAG_CATEGORY_LABELS: Record<string, string> = {
@@ -74,20 +75,29 @@ async function captureVideoThumbnail(file: File): Promise<Blob | null> {
   })
 }
 
+interface UploadedAsset {
+  path:  string
+  type:  'image' | 'video' | 'video_thumb'
+}
+
 export function NewPostForm({ creatorId }: { creatorId: string }) {
-  void creatorId // passed by parent but auth is checked server-side
+  void creatorId
   const router = useRouter()
   const fileRef = useRef<HTMLInputElement>(null)
 
   const [caption, setCaption] = useState('')
   const [accessType, setAccessType] = useState<AccessType>('subscriber_only')
-  const [ppvPrice, setPpvPrice] = useState('5.99')
+  const [ppvPrice, setPpvPrice] = useState(MIN_PPV_USD.toFixed(2))
   const [items, setItems] = useState<MediaItem[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [progress, setProgress] = useState('')
   const [warning, setWarning] = useState<{ hits: PrecheckHit[] } | null>(null)
-  const precheckRef = useRef<PrecheckResult[] | null>(null)
+
+  // Uploaded paths cached between precheck and create — we re-use the same
+  // objects so the server doesn't have to re-download or re-key anything.
+  const uploadedRef       = useRef<UploadedAsset[]>([])
+  const precheckRef       = useRef<PrecheckResult[] | null>(null)
 
   function handleFiles(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(e.target.files || [])
@@ -113,89 +123,161 @@ export function NewPostForm({ creatorId }: { creatorId: string }) {
   function removeItem(index: number) {
     URL.revokeObjectURL(items[index].localUrl)
     setItems(prev => prev.filter((_, i) => i !== index))
+    // Any uploads tied to removed items will become orphans; they're cheap
+    // and a janitor sweep can reap them later.
+    uploadedRef.current = []
+    precheckRef.current = null
   }
 
-  async function performUpload() {
-    setError('')
-    setLoading(true)
+  // ── Upload all media items to Supabase storage via signed URLs ──────────
+  // Returns one entry per `items[i]` in the same order — image paths and
+  // video paths share the array, with video_thumb paths interleaved as a
+  // separate type (kept in the same array for clean ordering).
+  async function uploadAll(): Promise<UploadedAsset[]> {
+    const supabase = createClient()
+    const out: UploadedAsset[] = []
 
-    try {
-      const supabase = createClient()
-      const videoItems = items.filter(item => item.type === 'video')
-      const uploadedVideoPaths: string[] = []
-      const videoThumbs: (Blob | null)[] = []
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      setProgress(`Uploading ${item.type} ${i + 1} of ${items.length}…`)
 
-      if (videoItems.length > 0) {
-        setProgress(`Uploading ${videoItems.length} video${videoItems.length > 1 ? 's' : ''}…`)
-        for (let vi = 0; vi < videoItems.length; vi++) {
-          const item = videoItems[vi]
-          setProgress(`Uploading video ${vi + 1} of ${videoItems.length}…`)
+      // Get a signed URL for the raw media in `originals`.
+      const urlRes = await fetch('/api/posts/upload-url', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          filename:    item.file.name,
+          contentType: item.file.type,
+          bucket:      'originals',
+        }),
+      })
+      if (!urlRes.ok) throw new Error(`Failed to get upload URL (${urlRes.status})`)
+      const { path, token } = await urlRes.json() as { path: string; token: string }
 
-          const urlRes = await fetch('/api/posts/upload-url', {
-            method: 'POST',
+      const { error: uploadErr } = await supabase.storage
+        .from('originals')
+        .uploadToSignedUrl(path, token, item.file, { contentType: item.file.type })
+      if (uploadErr) throw new Error(`Upload failed: ${uploadErr.message}`)
+
+      out.push({ path, type: item.type })
+
+      // For videos, also capture a client-side thumbnail and upload it to
+      // the `previews` bucket so the server can pick it up by path.
+      if (item.type === 'video') {
+        setProgress(`Preparing video ${i + 1} thumbnail…`)
+        const thumb = await captureVideoThumbnail(item.file)
+        if (thumb) {
+          const thumbUrlRes = await fetch('/api/posts/upload-url', {
+            method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filename: item.file.name, contentType: item.file.type }),
+            body:    JSON.stringify({
+              filename:    'thumb.jpg',
+              contentType: 'image/jpeg',
+              bucket:      'previews',
+            }),
           })
-          if (!urlRes.ok) throw new Error('Failed to get upload URL')
-          const { path, token } = await urlRes.json()
-
-          const { error: uploadErr } = await supabase.storage
-            .from('originals')
-            .uploadToSignedUrl(path, token, item.file, { contentType: item.file.type })
-          if (uploadErr) throw new Error(`Failed to upload video: ${uploadErr.message}`)
-
-          uploadedVideoPaths.push(path)
-
-          setProgress(`Processing video ${vi + 1} thumbnail…`)
-          videoThumbs.push(await captureVideoThumbnail(item.file))
+          if (thumbUrlRes.ok) {
+            const { path: thumbPath, token: thumbToken } = await thumbUrlRes.json() as { path: string; token: string }
+            const { error: thumbErr } = await supabase.storage
+              .from('previews')
+              .uploadToSignedUrl(thumbPath, thumbToken, thumb, { contentType: 'image/jpeg' })
+            if (!thumbErr) {
+              out.push({ path: thumbPath, type: 'video_thumb' })
+            }
+          }
         }
       }
-
-      setProgress('Saving post…')
-      const formData = new FormData()
-      formData.append('caption', caption)
-      formData.append('access_type', accessType)
-      if (accessType === 'ppv') formData.append('price_usd', ppvPrice)
-
-      const mediaOrder = items.map(item => item.type)
-      formData.append('mediaOrder', JSON.stringify(mediaOrder))
-
-      let videoOrderIdx = 0
-      for (const item of items) {
-        if (item.type === 'image') {
-          formData.append('files', item.file)
-        } else {
-          formData.append('videoPaths', uploadedVideoPaths[videoOrderIdx])
-          const thumb = videoThumbs[videoOrderIdx]
-          if (thumb) formData.append('videoThumbs', thumb, 'thumb.jpg')
-          videoOrderIdx++
-        }
-      }
-
-      // Forward precheck scores so the server skips a second Sightengine call.
-      if (precheckRef.current) {
-        formData.append('precheckResults', JSON.stringify(precheckRef.current))
-      }
-
-      const res = await fetch('/api/posts/create', { method: 'POST', body: formData })
-      // Parse body defensively — the platform can terminate a slow upload after
-      // the row is already inserted, leaving us with an empty/non-JSON response
-      // ("Unexpected end of JSON input" in production). Treat `res.ok` as truth.
-      const raw = await res.text()
-      let data: { error?: string } = {}
-      if (raw) {
-        try { data = JSON.parse(raw) } catch { /* keep empty */ }
-      }
-      if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`)
-
-      setFlash('Post published')
-      router.push('/dashboard/posts')
-      router.refresh()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong')
-      setLoading(false)
-      setProgress('')
     }
+
+    return out
+  }
+
+  // ── Run Sightengine against the just-uploaded image paths ───────────────
+  async function runPrecheck(uploaded: UploadedAsset[]): Promise<{ ok: true; results: PrecheckResult[]; hits: PrecheckHit[] } | { ok: false }> {
+    const imagePaths = uploaded.filter((u) => u.type === 'image').map((u) => u.path)
+    if (imagePaths.length === 0) return { ok: true, results: [], hits: [] }
+
+    setProgress('Checking content…')
+    try {
+      const res = await fetch('/api/posts/precheck', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ paths: imagePaths }),
+      })
+      if (!res.ok) return { ok: false }
+      const { results } = await res.json() as { results: PrecheckResult[] }
+      const hits = results.filter((r) => r.flagged).map((r) => ({
+        index:      r.index,
+        categories: r.categories,
+        maxScore:   r.maxScore,
+      }))
+      return { ok: true, results, hits }
+    } catch {
+      return { ok: false }
+    }
+  }
+
+  // ── Final step: POST /api/posts/create with the path manifest ───────────
+  async function finalizePost() {
+    setProgress('Saving post…')
+
+    const uploaded   = uploadedRef.current
+    const mediaOrder = items.map((item) => item.type)
+
+    // Walk items[] and pluck the matching paths from `uploaded`. Video
+    // thumbs immediately follow their video in `uploaded`, so we step the
+    // cursor past each thumb after its video is consumed.
+    const imagePaths:      string[] = []
+    const videoPaths:      string[] = []
+    const videoThumbPaths: string[] = []
+    let cursor = 0
+    for (const item of items) {
+      const entry = uploaded[cursor++]
+      if (!entry) continue
+      if (item.type === 'image') {
+        imagePaths.push(entry.path)
+      } else {
+        videoPaths.push(entry.path)
+        const next = uploaded[cursor]
+        if (next?.type === 'video_thumb') {
+          videoThumbPaths.push(next.path)
+          cursor++
+        } else {
+          videoThumbPaths.push('') // keep alignment if thumb capture failed
+        }
+      }
+    }
+
+    const body = {
+      caption,
+      access_type:    accessType,
+      price_usd:      accessType === 'ppv' ? parseFloat(ppvPrice) : null,
+      mediaOrder,
+      imagePaths,
+      videoPaths,
+      videoThumbPaths: videoThumbPaths.filter((p) => p !== ''),
+      precheckResults: precheckRef.current ?? undefined,
+    }
+
+    const res = await fetch('/api/posts/create', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    })
+    const raw = await res.text()
+    let data: { error?: string; published?: boolean } = {}
+    if (raw) {
+      try { data = JSON.parse(raw) } catch { /* keep empty */ }
+    }
+    if (!res.ok) throw new Error(data.error ?? `Error ${res.status}`)
+
+    setFlash(
+      data.published === false
+        ? 'Saved as draft — connect Stripe to publish your posts.'
+        : 'Post published',
+    )
+    router.push('/dashboard/posts')
+    router.refresh()
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -206,48 +288,53 @@ export function NewPostForm({ creatorId }: { creatorId: string }) {
     }
     if (accessType === 'ppv') {
       const price = parseFloat(ppvPrice)
-      if (isNaN(price) || price < 1) { setError('PPV price must be at least $1.00'); return }
-    }
-
-    setError('')
-    precheckRef.current = null
-
-    // Pre-check images for explicit content before doing any uploads.
-    const imageItems = items.filter(i => i.type === 'image')
-    if (imageItems.length > 0) {
-      setLoading(true)
-      setProgress('Checking content…')
-      try {
-        const fd = new FormData()
-        for (const it of imageItems) fd.append('files', it.file)
-        const res = await fetch('/api/posts/precheck', { method: 'POST', body: fd })
-        if (res.ok) {
-          const { results } = await res.json() as { results: PrecheckResult[] }
-          precheckRef.current = results
-          const hits = results.filter(r => r.flagged).map(r => ({
-            index:      r.index,
-            categories: r.categories,
-            maxScore:   r.maxScore,
-          }))
-          if (hits.length > 0) {
-            setLoading(false)
-            setProgress('')
-            setWarning({ hits })
-            return
-          }
-        }
-        // If precheck fails, fall through and let the server handle it during /create.
-      } catch {
-        // Network error on precheck → don't block, server will still flag for review.
+      if (isNaN(price) || price < MIN_PPV_USD) {
+        setError(`PPV price must be at least $${MIN_PPV_USD.toFixed(2)}`)
+        return
       }
     }
 
-    await performUpload()
+    setError('')
+    setLoading(true)
+
+    try {
+      // Skip re-upload if we already uploaded for the precheck. (The user
+      // is confirming after a flag warning — files haven't changed.)
+      if (uploadedRef.current.length === 0) {
+        uploadedRef.current = await uploadAll()
+      }
+
+      const precheck = await runPrecheck(uploadedRef.current)
+      if (precheck.ok) {
+        precheckRef.current = precheck.results
+        if (precheck.hits.length > 0) {
+          setLoading(false)
+          setProgress('')
+          setWarning({ hits: precheck.hits })
+          return
+        }
+      }
+      // Precheck failure (network, server) doesn't block — the server-side
+      // create path will scan again before storing the post.
+
+      await finalizePost()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong')
+      setLoading(false)
+      setProgress('')
+    }
   }
 
   async function confirmUploadAnyway() {
     setWarning(null)
-    await performUpload()
+    setLoading(true)
+    try {
+      await finalizePost()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong')
+      setLoading(false)
+      setProgress('')
+    }
   }
 
   function cancelWarning() {
@@ -344,12 +431,12 @@ export function NewPostForm({ creatorId }: { creatorId: string }) {
       {/* PPV price */}
       {accessType === 'ppv' && (
         <Input
-          label="PPV Price (USD)"
+          label={`PPV Price (USD) — min $${MIN_PPV_USD.toFixed(2)}`}
           type="number"
-          placeholder="5.99"
+          placeholder={MIN_PPV_USD.toFixed(2)}
           value={ppvPrice}
           onChange={(e) => setPpvPrice(e.target.value)}
-          min="1"
+          min={MIN_PPV_USD.toString()}
           max="999"
           step="0.01"
         />

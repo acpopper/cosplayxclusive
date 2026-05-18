@@ -43,6 +43,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Already purchased' }, { status: 400 })
     }
 
+    // PPV is gated behind a subscription (free or paid). Fans must opt in to
+    // the creator first; otherwise they can't buy individual posts.
+    if (user.id !== post.creator_id) {
+      const nowIso = new Date().toISOString()
+      const { data: sub } = await supabase
+        .from('subscriptions')
+        .select('id, current_period_end')
+        .eq('fan_id',     user.id)
+        .eq('creator_id', post.creator_id)
+        .eq('status',     'active')
+        .maybeSingle()
+
+      const hasActiveSub = !!sub && (sub.current_period_end == null || sub.current_period_end > nowIso)
+      if (!hasActiveSub) {
+        return NextResponse.json(
+          { error: 'Subscribe to this creator before unlocking PPV posts.', code: 'subscription_required' },
+          { status: 403 },
+        )
+      }
+    }
+
     const { data: creator } = await supabase
       .from('profiles')
       .select('*')

@@ -4,6 +4,7 @@ import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { checkImageContent } from '@/lib/sightengine'
 import { checkAndSuspendForNsfw } from '@/lib/nsfw-strikes'
 import { normalizeImageInput } from '@/lib/image-normalize'
+import { MIN_PPV_USD } from '@/lib/ppv-pricing'
 
 const BUCKET_PREVIEW = 'previews'
 const BUCKET_ORIGINAL = 'originals'
@@ -76,11 +77,15 @@ export async function POST(request: NextRequest) {
   // price input (if any) is silently ignored rather than rejected.
   const priceRaw = (formData.get('price_usd') as string | null)?.trim() ?? ''
   const priceParsed = priceRaw ? parseFloat(priceRaw) : 0
-  const priceUsd =
-    (isApprovedCreator || isAdmin) && Number.isFinite(priceParsed) && priceParsed >= 1
-      ? priceParsed
-      : 0
-  const isPpv = priceUsd >= 1
+  const wantsPpv = (isApprovedCreator || isAdmin) && Number.isFinite(priceParsed) && priceParsed > 0
+  if (wantsPpv && priceParsed < MIN_PPV_USD) {
+    return NextResponse.json(
+      { error: `PPV price must be at least $${MIN_PPV_USD.toFixed(2)}` },
+      { status: 400 },
+    )
+  }
+  const priceUsd = wantsPpv ? priceParsed : 0
+  const isPpv = priceUsd >= MIN_PPV_USD
 
   if (!conversationId) {
     return NextResponse.json({ error: 'Missing conversationId' }, { status: 400 })
@@ -115,7 +120,10 @@ export async function POST(request: NextRequest) {
     files.map(async (file, index) => {
       const rawBuffer  = Buffer.from(await file.arrayBuffer())
       const normalized = await normalizeImageInput(rawBuffer, file)
-      const result     = await checkImageContent(normalized.buffer, normalized.contentType)
+      const result     = await checkImageContent(normalized.buffer, normalized.contentType, {
+        userId: user.id,
+        source: 'message',
+      })
       return { index, file, buffer: normalized.buffer, contentType: normalized.contentType, ext: normalized.ext, result }
     }),
   )

@@ -5,18 +5,21 @@ import { usePathname } from 'next/navigation'
 
 const tabs = [
   { href: '/admin/creators/applications', label: 'Applications', badgeKey: 'pending' as const },
+  { href: '/admin/creators/manage',       label: 'Manage',       badgeKey: 'stripePending' as const },
   { href: '/admin/creators/stats',        label: 'Stats',        badgeKey: null },
 ]
 
 interface CreatorsTabsProps {
-  pendingCount?: number
+  pendingCount?:       number
+  stripePendingCount?: number
 }
 
-export function CreatorsTabs({ pendingCount }: CreatorsTabsProps) {
+export function CreatorsTabs({ pendingCount, stripePendingCount }: CreatorsTabsProps) {
   const pathname = usePathname()
 
-  function badge(key: 'pending' | null): number | null {
-    if (key === 'pending') return pendingCount ?? null
+  function badge(key: 'pending' | 'stripePending' | null): number | null {
+    if (key === 'pending')       return pendingCount       ?? null
+    if (key === 'stripePending') return stripePendingCount ?? null
     return null
   }
 
@@ -39,7 +42,15 @@ export function CreatorsTabs({ pendingCount }: CreatorsTabsProps) {
             >
               {label}
               {count != null && count > 0 && (
-                <span className="ml-2 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 rounded-full bg-accent/15 text-accent text-[11px] font-semibold">
+                <span
+                  className={[
+                    'ml-2 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 rounded-full text-[11px] font-semibold',
+                    // Stripe badge gets Stripe brand colour; the rest use accent.
+                    badgeKey === 'stripePending'
+                      ? 'bg-[#635BFF]/15 text-[#8c87ff]'
+                      : 'bg-accent/15 text-accent',
+                  ].join(' ')}
+                >
                   {count > 99 ? '99+' : count}
                 </span>
               )}

@@ -464,9 +464,20 @@ export function PostCard({
                   </Button>
                 )}
                 {post.access_type === 'ppv' && (
-                  <Button size="sm" onClick={handlePPVPurchase} loading={checkoutLoading}>
-                    Unlock · ${post.price_usd?.toFixed(2)}
-                  </Button>
+                  isSubscribed || viewerId === creator.id ? (
+                    <Button size="sm" onClick={handlePPVPurchase} loading={checkoutLoading}>
+                      Unlock · ${post.price_usd?.toFixed(2)}
+                    </Button>
+                  ) : (
+                    <div className="flex flex-col items-center gap-1.5">
+                      <p className="text-xs text-white/90 px-2">Subscribe first to unlock PPV posts</p>
+                      <Button size="sm" onClick={handleSubscribe} loading={checkoutLoading}>
+                        {creator.subscription_price_usd === 0
+                          ? 'Follow for Free'
+                          : `Subscribe · $${creator.subscription_price_usd}/mo`}
+                      </Button>
+                    </div>
+                  )
                 )}
               </div>
             )}
@@ -633,7 +644,12 @@ export function PostCard({
           title="Unlock this post"
           subtitle={`Pay $${post.price_usd?.toFixed(2)} to access this exclusive content.`}
           label={`Pay $${post.price_usd?.toFixed(2)}`}
-          onSuccess={() => { setPpvSecret(null); setPpvAccount(null); router.refresh() }}
+          onSuccess={() => {
+            setPpvSecret(null); setPpvAccount(null)
+            // Hard reload — router.refresh() is unreliable on mobile Safari
+            // for re-rendering server components with new signed URLs.
+            window.location.reload()
+          }}
           onClose={() => { setPpvSecret(null); setPpvAccount(null) }}
         />
       )}
@@ -645,7 +661,10 @@ export function PostCard({
           title={`Subscribe to ${creator.display_name || creator.username}`}
           subtitle={`$${creator.subscription_price_usd}/month — cancel anytime.`}
           label={`Subscribe · $${creator.subscription_price_usd}/mo`}
-          onSuccess={() => { setSubSecret(null); setSubAccount(null); router.refresh() }}
+          onSuccess={() => {
+            setSubSecret(null); setSubAccount(null)
+            window.location.reload()
+          }}
           onClose={() => { setSubSecret(null); setSubAccount(null) }}
         />
       )}

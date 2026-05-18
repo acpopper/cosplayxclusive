@@ -792,8 +792,8 @@ export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPost
       )}
 
       {ppvSecret && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={() => { setPpvSecret(null); setPpvAccount(null) }}>
-          <div className="bg-bg-card border border-border rounded-2xl w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm overflow-y-auto" onClick={() => { setPpvSecret(null); setPpvAccount(null) }}>
+          <div className="bg-bg-card border border-border rounded-2xl w-full max-w-sm shadow-2xl my-auto max-h-[calc(100dvh-2rem)] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="p-6">
               <h2 className="text-lg font-bold text-text-primary mb-1">Unlock this post</h2>
               <p className="text-sm text-text-secondary mb-5">
@@ -802,7 +802,14 @@ export function FeedPostCard({ post, viewerId, viewerIsAdmin = false }: FeedPost
               <Elements stripe={ppvStripePromise} options={{ clientSecret: ppvSecret, appearance: STRIPE_APPEARANCE }}>
                 <StripePaymentForm
                   label={`Pay $${post.price_usd?.toFixed(2)}`}
-                  onSuccess={() => { setPpvSecret(null); setPpvAccount(null); router.refresh() }}
+                  onSuccess={() => {
+                    setPpvSecret(null); setPpvAccount(null)
+                    // router.refresh() can be flaky on mobile Safari (cached
+                    // server component output, stale signed URLs). Hard reload
+                    // is the only reliable way to re-render with the unlocked
+                    // media URLs.
+                    window.location.reload()
+                  }}
                   onCancel={() => { setPpvSecret(null); setPpvAccount(null) }}
                 />
               </Elements>

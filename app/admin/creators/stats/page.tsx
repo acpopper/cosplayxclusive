@@ -1,8 +1,37 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { CreatorsTabs } from '../tabs'
 import { StatsTable, type CreatorStat } from './stats-table'
+import {
+  RevenueOverTimeChart,
+  TopEarningCreatorsChart,
+  RevenueSourceBreakdown,
+  type RevenueByDay,
+  type TopCreator,
+} from './charts'
+import { getStripeStage } from '../stripe-status-pill'
+import type { Profile } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
+
+const REVENUE_WINDOW_DAYS = 30
+const TOP_CREATORS_COUNT  = 5
+
+function emptyDailyBuckets(): RevenueByDay[] {
+  const days: RevenueByDay[] = []
+  const today = new Date()
+  for (let i = REVENUE_WINDOW_DAYS - 1; i >= 0; i--) {
+    const d = new Date(today)
+    d.setDate(today.getDate() - i)
+    days.push({
+      day:   d.toISOString().slice(0, 10),
+      sub:   0,
+      ppv:   0,
+      tip:   0,
+      total: 0,
+    })
+  }
+  return days
+}
 
 type PostAgg = { count: number; last30: number; firstAt: string | null; lastAt: string | null }
 
@@ -34,7 +63,7 @@ export default async function AdminCreatorsStatsPage() {
   // their historical revenue is still relevant context for admins).
   const { data: creators } = await service
     .from('profiles')
-    .select('id, username, display_name, avatar_url, creator_status, subscription_price_usd, created_at')
+    .select('id, username, display_name, avatar_url, creator_status, subscription_price_usd, created_at, stripe_account_id, stripe_charges_enabled, stripe_payouts_enabled, stripe_details_submitted')
     .in('creator_status', ['approved', 'suspended'])
 
   const creatorIds = (creators ?? []).map((c) => c.id)
@@ -45,6 +74,8 @@ export default async function AdminCreatorsStatsPage() {
     .select('id', { count: 'exact', head: true })
     .eq('creator_status', 'pending')
 
+  const stripePendingCount = (creators ?? []).filter((c) => getStripeStage(c as Profile) !== 'ok').length
+
   if (creatorIds.length === 0) {
     return (
       <>
@@ -52,7 +83,7 @@ export default async function AdminCreatorsStatsPage() {
           <h1 className="text-2xl font-bold text-text-primary">Creators</h1>
           <p className="text-sm text-text-secondary mt-1">No approved creators yet</p>
         </div>
-        <CreatorsTabs pendingCount={pendingCount ?? 0} />
+        <CreatorsTabs pendingCount={pendingCount ?? 0} stripePendingCount={0} />
         <div className="text-center py-16 text-text-muted bg-bg-card border border-border rounded-2xl">
           <p className="text-3xl mb-3">📊</p>
           <p className="font-medium text-text-secondary">Stats will appear once creators are approved</p>
@@ -137,6 +168,38 @@ export default async function AdminCreatorsStatsPage() {
   const totalPosts = rows.reduce((n, r) => n + r.posts_total, 0)
   const activeCreators = rows.filter((r) => r.status === 'approved').length
 
+  // Build the daily series (last 30 days). One zero-filled bucket per day so
+  // the chart line is continuous even when there's no activity.
+  const dailyBuckets = emptyDailyBuckets()
+  const dayIndex = new Map(dailyBuckets.map((b, i) => [b.day, i]))
+  const cutoffDay = dailyBuckets[0].day
+  for (const t of txs ?? []) {
+    const amt = Number(t.amount_usd)
+    if (!Number.isFinite(amt)) continue
+    const day = String(t.created_at).slice(0, 10)
+    if (day < cutoffDay) continue
+    const idx = dayIndex.get(day)
+    if (idx === undefined) continue
+    const b = dailyBuckets[idx]
+    if (t.type === 'subscription') b.sub += amt
+    else if (t.type === 'ppv')     b.ppv += amt
+    else if (t.type === 'tip')     b.tip += amt
+    b.total = b.sub + b.ppv + b.tip
+  }
+
+  const topEarners: TopCreator[] = [...rows]
+    .sort((a, b) => b.revenue_total - a.revenue_total)
+    .slice(0, TOP_CREATORS_COUNT)
+    .filter((r) => r.revenue_total > 0)
+    .map((r) => ({
+      username:     r.username,
+      display_name: r.display_name,
+      total:        r.revenue_total,
+      sub:          r.revenue_subscription,
+      ppv:          r.revenue_ppv,
+      tip:          r.revenue_tip,
+    }))
+
   return (
     <>
       <div className="mb-6">
@@ -146,7 +209,7 @@ export default async function AdminCreatorsStatsPage() {
         </p>
       </div>
 
-      <CreatorsTabs pendingCount={pendingCount ?? 0} />
+      <CreatorsTabs pendingCount={pendingCount ?? 0} stripePendingCount={stripePendingCount} />
 
       {/* Platform totals */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
@@ -162,6 +225,15 @@ export default async function AdminCreatorsStatsPage() {
           }
           hint="Subs / PPV / Tips"
         />
+      </div>
+
+      {/* Charts */}
+      <div className="flex flex-col gap-4 mb-6">
+        <RevenueOverTimeChart data={dailyBuckets} />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <TopEarningCreatorsChart creators={topEarners} />
+          <RevenueSourceBreakdown sub={totalSub} ppv={totalPpv} tip={totalTip} />
+        </div>
       </div>
 
       <StatsTable

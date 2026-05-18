@@ -434,7 +434,9 @@ export function CreatorProfileClient({
           onSuccess={() => {
             setSubSecret(null); setSubAccount(null)
             setLocalSubscribed(true)
-            router.refresh()
+            // Hard reload — router.refresh() is unreliable on mobile Safari
+            // for re-rendering server components with new sub state.
+            window.location.reload()
           }}
           onClose={() => { setSubSecret(null); setSubAccount(null) }}
         />

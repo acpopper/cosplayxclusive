@@ -11,8 +11,9 @@ interface SidebarProps {
 }
 
 const navItems = [
-  { href: '/admin/creators',   label: 'Creators',     icon: '◈', countKey: null },
-  { href: '/admin/moderation', label: 'Moderation',   icon: '◉', countKey: 'moderation' as const },
+  { href: '/admin/creators',    label: 'Creators',     icon: '◈', countKey: null },
+  { href: '/admin/moderation',  label: 'Moderation',   icon: '◉', countKey: 'moderation' as const },
+  { href: '/admin/sightengine', label: 'Sightengine',  icon: '◇', countKey: null },
 ]
 
 export function AdminSidebar({ profile, moderationCount = 0 }: SidebarProps) {

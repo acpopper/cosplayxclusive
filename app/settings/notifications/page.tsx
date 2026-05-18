@@ -7,6 +7,8 @@ import { Footer } from '@/components/footer'
 import {
   EMAIL_CATEGORIES,
   TOGGLEABLE_CATEGORIES,
+  visibleRequiredCategories,
+  visibleToggleableCategories,
   type EmailCategory,
   type EmailPreferencesRow,
 } from '@/lib/email'
@@ -30,13 +32,16 @@ export default async function NotificationsSettingsPage() {
     .single()
   if (!profile) redirect('/login')
 
+  const isCreator = profile.creator_status === 'approved' || profile.role === 'admin'
+
+  // Always select every toggleable column from the DB — that way we can hide
+  // a category in the UI today and surface it later without re-fetching.
   const { data: row } = await supabase
     .from('email_preferences')
     .select(TOGGLEABLE_CATEGORIES.join(', '))
     .eq('user_id', user.id)
     .maybeSingle()
 
-  // Fall back to per-category defaults when no row exists.
   const initial: EmailPreferencesRow = TOGGLEABLE_CATEGORIES.reduce(
     (acc, key) => {
       const stored = (row as Record<string, boolean | undefined> | null)?.[key]
@@ -46,8 +51,8 @@ export default async function NotificationsSettingsPage() {
     {} as EmailPreferencesRow,
   )
 
-  const requiredKeys = (Object.keys(EMAIL_CATEGORIES) as EmailCategory[])
-    .filter((k) => EMAIL_CATEGORIES[k].required)
+  const requiredKeys    = visibleRequiredCategories({ isCreator })
+  const toggleableKeys  = visibleToggleableCategories({ isCreator })
 
   return (
     <div className="min-h-screen bg-bg-base flex flex-col">
@@ -85,7 +90,17 @@ export default async function NotificationsSettingsPage() {
           </section>
 
           {/* ── User-toggleable ─────────────────────────────────────── */}
-          <NotificationsForm initial={initial} />
+          {toggleableKeys.length > 0 ? (
+            <NotificationsForm initial={initial} categoryKeys={toggleableKeys} />
+          ) : (
+            <section className="bg-bg-card border border-border rounded-2xl p-5">
+              <h2 className="text-sm font-semibold text-text-primary mb-1">Optional</h2>
+              <p className="text-xs text-text-muted">
+                You have no optional emails to configure right now. We&apos;ll only send the
+                account and payment messages above.
+              </p>
+            </section>
+          )}
         </div>
       </main>
 

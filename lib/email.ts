@@ -4,6 +4,8 @@ import { createServiceClient } from '@/lib/supabase/server'
 import {
   EMAIL_CATEGORIES,
   TOGGLEABLE_CATEGORIES,
+  visibleRequiredCategories,
+  visibleToggleableCategories,
   type EmailCategory,
   type EmailPreferencesRow,
 } from '@/lib/email-categories'
@@ -11,7 +13,12 @@ import {
 // Re-export so existing server-side callers can keep importing from '@/lib/email'.
 // Client components must import from '@/lib/email-categories' directly to avoid
 // pulling next/headers (via supabase/server) into the browser bundle.
-export { EMAIL_CATEGORIES, TOGGLEABLE_CATEGORIES }
+export {
+  EMAIL_CATEGORIES,
+  TOGGLEABLE_CATEGORIES,
+  visibleRequiredCategories,
+  visibleToggleableCategories,
+}
 export type { EmailCategory, EmailPreferencesRow }
 
 const resend = new Resend(process.env.RESEND_API_KEY)

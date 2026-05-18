@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { PaymentModal } from '@/components/payment-modal'
+import { MIN_PPV_USD } from '@/lib/ppv-pricing'
 
 interface SenderProfile {
   id: string
@@ -1054,7 +1055,7 @@ export function ChatClient({
                   <input
                     type="number"
                     inputMode="decimal"
-                    min="1"
+                    min={MIN_PPV_USD.toString()}
                     step="0.01"
                     placeholder="Free"
                     value={pendingPriceRaw}
@@ -1062,7 +1063,7 @@ export function ChatClient({
                     className="w-24 pl-5 pr-2 py-1 rounded-lg border border-border bg-bg-elevated text-base text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors"
                   />
                 </span>
-                <span className="text-text-muted">— charge to unlock</span>
+                <span className="text-text-muted">— min ${MIN_PPV_USD.toFixed(2)}, charge to unlock</span>
               </label>
             )}
           </div>
@@ -1204,8 +1205,9 @@ export function ChatClient({
           setUnlockSecret(null)
           setUnlockAccount(null)
           setUnlocking(null)
-          // Server-rendered URLs will reflect the new purchase after refresh.
-          router.refresh()
+          // Hard reload — router.refresh() can leave mobile Safari with stale
+          // server-component output for the freshly-unlocked PPV message.
+          window.location.reload()
         }}
         onClose={() => { setUnlockSecret(null); setUnlockAccount(null); setUnlocking(null) }}
       />

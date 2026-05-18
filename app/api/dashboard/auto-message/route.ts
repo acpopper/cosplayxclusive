@@ -74,7 +74,10 @@ export async function POST(request: NextRequest) {
         .from(BUCKET)
         .upload(path, normalized.buffer, { contentType: normalized.contentType, upsert: false })
         .then(({ error }) => { if (!error) newPaths.push(path) }),
-      checkImageContent(normalized.buffer, normalized.contentType),
+      checkImageContent(normalized.buffer, normalized.contentType, {
+        userId: user.id,
+        source: 'auto_message',
+      }),
     ])
 
     if (flagResult.status === 'fulfilled' && flagResult.value.flagged) {

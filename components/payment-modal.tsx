@@ -102,11 +102,11 @@ export function PaymentModal({ clientSecret, stripeAccount, label, title, subtit
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm overflow-y-auto"
       onClick={onClose}
     >
       <div
-        className="bg-bg-card border border-border rounded-2xl w-full max-w-sm shadow-2xl"
+        className="bg-bg-card border border-border rounded-2xl w-full max-w-sm shadow-2xl my-auto max-h-[calc(100dvh-2rem)] overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
         <div className="p-6">

@@ -4,7 +4,18 @@ import sharp from 'sharp'
 import { checkImageContent, type ContentFlagResult } from '@/lib/sightengine'
 import { checkAndSuspendForNsfw } from '@/lib/nsfw-strikes'
 import { normalizeImageInput } from '@/lib/image-normalize'
+import { MIN_PPV_USD } from '@/lib/ppv-pricing'
 import { getPostHogClient } from '@/lib/posthog-server'
+
+// Sharp keeps decoded raster buffers in memory between calls by default.
+// In a constrained serverless environment that piles up across the image
+// loop and OOMs the function. Disable the cache and serialise sharp work so
+// peak memory stays bounded.
+sharp.cache(false)
+sharp.concurrency(1)
+
+export const maxDuration = 60
+export const dynamic     = 'force-dynamic'
 
 interface PrecheckResult {
   index:      number
@@ -71,242 +82,347 @@ async function applyWatermark(buffer: Buffer, username: string): Promise<Buffer>
 }
 
 export async function POST(request: NextRequest) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  let stage = 'auth'
+  try {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('creator_status, username')
-    .eq('id', user.id)
-    .single()
+    stage = 'profile'
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('creator_status, username, stripe_charges_enabled')
+      .eq('id', user.id)
+      .single()
 
-  if (!profile || profile.creator_status !== 'approved') {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-  }
+    if (!profile || profile.creator_status !== 'approved') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
 
-  const formData = await request.formData()
-  const caption = formData.get('caption') as string | null
-  const accessType = formData.get('access_type') as string
-  const priceRaw = formData.get('price_usd') as string | null
+    // Creators can draft posts before completing Stripe onboarding, but those
+    // posts stay unpublished until charges are enabled.
+    const canPublish = !!profile.stripe_charges_enabled
 
-  // mediaOrder: JSON array like ["image","video","image"] — preserves mixed ordering
-  const mediaOrder: string[] = JSON.parse((formData.get('mediaOrder') as string) ?? '[]')
-  const imageFiles = formData.getAll('files') as File[]
-  const videoPaths = formData.getAll('videoPaths') as string[]
-  const videoThumbFiles = formData.getAll('videoThumbs') as File[]
+    stage = 'parse_body'
+    // Body is now JSON, not multipart. Images already live in Supabase (the
+    // client uploaded them via signed URL) — we just receive their paths.
+    // Video thumbs are tiny so they could ride here as data URLs if needed;
+    // for now thumbs are uploaded via signed URL too, alongside the video.
+    const body = await request.json().catch(() => null) as {
+      caption?:          string | null
+      access_type?:      string
+      price_usd?:        number | null
+      mediaOrder?:       string[]
+      imagePaths?:       string[]    // uploaded image paths in `originals/`
+      videoPaths?:       string[]    // uploaded video paths in `originals/`
+      videoThumbPaths?:  string[]    // uploaded thumb paths in `previews/`
+      precheckResults?:  PrecheckResult[]
+    } | null
 
-  // If the client already pre-screened these images via /api/posts/precheck, it
-  // sends back the per-image flag/score results so we don't pay for a second
-  // Sightengine call. Indexed by image position (0-based) within imageFiles.
-  const precheckResults = parsePrecheckResults(formData.get('precheckResults') as string | null)
+    if (!body) {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+    }
 
-  if (mediaOrder.length === 0) {
-    return NextResponse.json({ error: 'No media provided' }, { status: 400 })
-  }
+    const caption     = body.caption ?? null
+    const accessType  = body.access_type ?? 'subscriber_only'
+    const priceRaw    = body.price_usd ?? null
+    const mediaOrder  = Array.isArray(body.mediaOrder)      ? body.mediaOrder      : []
+    const imagePaths  = Array.isArray(body.imagePaths)      ? body.imagePaths      : []
+    const videoPaths  = Array.isArray(body.videoPaths)      ? body.videoPaths      : []
+    const videoThumbPaths = Array.isArray(body.videoThumbPaths) ? body.videoThumbPaths : []
+    const precheckResults = Array.isArray(body.precheckResults)
+      ? new Map<number, PrecheckResult>(
+          body.precheckResults
+            .filter((r): r is PrecheckResult => typeof r?.index === 'number')
+            .map((r) => [r.index, r]),
+        )
+      : null
 
-  const service = createServiceClient()
-  const mediaPaths: string[] = []
-  const previewPaths: string[] = []
-  const mediaTypes: string[] = []
+    if (mediaOrder.length === 0) {
+      return NextResponse.json({ error: 'No media provided' }, { status: 400 })
+    }
 
-  interface PendingFlag {
-    storagePath:  string
-    previewPath:  string | null
-    categories:   string[]
-    maxScore:     number
-    scores:       object
-  }
-  const pendingFlags: PendingFlag[] = []
-
-  // Per-slot moderation results, aligned 1:1 with media_paths. Images carry
-  // the full SightEngine response (even when not flagged) so admins can audit
-  // raw scores from /api/admin/posts/[postId]/moderation. Videos are recorded
-  // as { scanned: false } so the array stays index-aligned with media_paths.
-  interface ModerationEntry {
-    index:      number
-    type:       'image' | 'video'
-    scanned:    boolean
-    flagged:    boolean
-    categories: string[]
-    max_score:  number
-    scores:     ContentFlagResult['scores']
-  }
-  const mediaModeration: ModerationEntry[] = []
-
-  const base = Date.now()
-  let imageIdx = 0
-  let videoIdx = 0
-
-  for (let i = 0; i < mediaOrder.length; i++) {
-    const type = mediaOrder[i]
-
-    if (type === 'image') {
-      const fileIndex = imageIdx
-      const file = imageFiles[imageIdx++]
-      if (!file) continue
-      const rawBuffer = Buffer.from(await file.arrayBuffer())
-
-      // HEIC inputs (iPhone) are transcoded to JPEG here so downstream
-      // consumers — Sightengine, browsers, sharp's preview pipeline — all see
-      // a format they support.
-      const normalized = await normalizeImageInput(rawBuffer, file)
-      const path = `${user.id}/${base}_${i}.${normalized.ext}`
-
-      // Use precheck results if the client already screened this image,
-      // otherwise call SightEngine here (in parallel with watermarking).
-      const cached = precheckResults?.get(fileIndex)
-      const flagResult: ContentFlagResult = cached
-        ? {
-            flagged:    cached.flagged,
-            categories: cached.categories,
-            maxScore:   cached.maxScore,
-            scores:     cached.scores,
-          }
-        : await checkImageContent(normalized.buffer, normalized.contentType)
-      const buffer = await applyWatermark(normalized.buffer, profile.username)
-
-      const { error: origErr } = await service.storage
-        .from('originals')
-        .upload(path, buffer, { contentType: normalized.contentType, cacheControl: '3600', upsert: false })
-
-      if (origErr) {
-        return NextResponse.json({ error: `Failed to upload image: ${origErr.message}` }, { status: 500 })
+    if (accessType === 'ppv') {
+      const priceNum = typeof priceRaw === 'number' ? priceRaw : parseFloat(String(priceRaw))
+      if (!Number.isFinite(priceNum) || priceNum < MIN_PPV_USD) {
+        return NextResponse.json(
+          { error: `PPV price must be at least $${MIN_PPV_USD.toFixed(2)}` },
+          { status: 400 },
+        )
       }
-      mediaPaths.push(path)
-      mediaTypes.push('image')
+    }
 
-      let savedPreviewPath: string | null = null
-      const previewPath = `${user.id}/${base}_${i}_preview.jpg`
-      try {
-        const previewBuffer = await makePreviewBuffer(buffer)
-        const { error: prevErr } = await service.storage
-          .from('previews')
-          .upload(previewPath, previewBuffer, { contentType: 'image/jpeg', cacheControl: '3600', upsert: false })
-        if (!prevErr) {
-          previewPaths.push(previewPath)
-          savedPreviewPath = previewPath
+    // Confirm every path the client sent belongs to this user. The
+    // upload-url route prefixes paths with `<user.id>/`; rejecting anything
+    // else stops a logged-in creator from referencing somebody else's upload.
+    const allPaths = [...imagePaths, ...videoPaths, ...videoThumbPaths]
+    for (const p of allPaths) {
+      if (typeof p !== 'string' || !p.startsWith(`${user.id}/`)) {
+        return NextResponse.json({ error: 'Forbidden path' }, { status: 403 })
+      }
+    }
+
+    const service = createServiceClient()
+    const mediaPaths:   string[] = []
+    const previewPaths: string[] = []
+    const mediaTypes:   string[] = []
+
+    interface PendingFlag {
+      storagePath: string
+      previewPath: string | null
+      categories:  string[]
+      maxScore:    number
+      scores:      object
+    }
+    const pendingFlags: PendingFlag[] = []
+
+    interface ModerationEntry {
+      index:      number
+      type:       'image' | 'video'
+      scanned:    boolean
+      flagged:    boolean
+      categories: string[]
+      max_score:  number
+      scores:     ContentFlagResult['scores']
+    }
+    const mediaModeration: ModerationEntry[] = []
+
+    let imageIdx = 0
+    let videoIdx = 0
+
+    for (let i = 0; i < mediaOrder.length; i++) {
+      const type = mediaOrder[i]
+      stage = `media_${i}_${type}`
+
+      if (type === 'image') {
+        const fileIndex = imageIdx
+        const tempPath = imagePaths[imageIdx++]
+        if (!tempPath) continue
+
+        // Download the raw image the client uploaded to Supabase storage.
+        const { data: blob, error: dlErr } = await service.storage.from('originals').download(tempPath)
+        if (dlErr || !blob) {
+          return NextResponse.json({ error: `Could not read uploaded image: ${dlErr?.message ?? 'missing'}` }, { status: 500 })
         }
-      } catch { /* skip */ }
-
-      mediaModeration.push({
-        index:      mediaPaths.length - 1,
-        type:       'image',
-        scanned:    true,
-        flagged:    flagResult.flagged,
-        categories: flagResult.categories,
-        max_score:  flagResult.maxScore,
-        scores:     flagResult.scores,
-      })
-
-      if (flagResult.flagged) {
-        pendingFlags.push({
-          storagePath: path,
-          previewPath: savedPreviewPath,
-          categories:  flagResult.categories,
-          maxScore:    flagResult.maxScore,
-          scores:      flagResult.scores,
+        const rawBuffer = Buffer.from(await blob.arrayBuffer())
+        const filename  = tempPath.split('/').pop() ?? 'image'
+        const normalized = await normalizeImageInput(rawBuffer, {
+          name: filename,
+          type: blob.type || 'application/octet-stream',
         })
-      }
 
-    } else if (type === 'video') {
-      const videoPath = videoPaths[videoIdx]
-      const thumbFile = videoThumbFiles[videoIdx]
-      videoIdx++
+        // Reuse the precheck result if the client already screened this image
+        // (it ran against the same bytes pre-upload). Otherwise call now.
+        const cached = precheckResults?.get(fileIndex)
+        const flagResult: ContentFlagResult = cached
+          ? {
+              flagged:    cached.flagged,
+              categories: cached.categories,
+              maxScore:   cached.maxScore,
+              scores:     cached.scores,
+            }
+          : await checkImageContent(normalized.buffer, normalized.contentType, {
+              userId: user.id,
+              source: 'post_create',
+            })
 
-      if (!videoPath) continue
-      mediaPaths.push(videoPath)
-      mediaTypes.push('video')
+        const watermarked = await applyWatermark(normalized.buffer, profile.username)
 
-      mediaModeration.push({
-        index:      mediaPaths.length - 1,
-        type:       'video',
-        scanned:    false,
-        flagged:    false,
-        categories: [],
-        max_score:  0,
-        scores:     {},
-      })
+        // Decide final path. If the input was already a web-friendly format,
+        // overwrite the temp object so we don't leave orphans. If we had to
+        // transcode (HEIC → JPEG), write to a new path with the correct
+        // extension and delete the temp.
+        const tempExt = (tempPath.split('.').pop() ?? '').toLowerCase()
+        const needsRename = normalized.converted && tempExt !== normalized.ext
+        const finalPath = needsRename
+          ? tempPath.replace(/\.[^./]+$/, `.${normalized.ext}`)
+          : tempPath
 
-      // Generate a blurred still preview from the client-captured thumbnail
-      if (thumbFile) {
-        const previewPath = `${user.id}/${base}_${i}_preview.jpg`
+        const { error: upErr } = await service.storage
+          .from('originals')
+          .upload(finalPath, watermarked, {
+            contentType: normalized.contentType,
+            cacheControl: '3600',
+            upsert: true,
+          })
+        if (upErr) {
+          return NextResponse.json({ error: `Failed to write watermarked image: ${upErr.message}` }, { status: 500 })
+        }
+
+        if (needsRename) {
+          await service.storage.from('originals').remove([tempPath]).catch(() => {/* best-effort */})
+        }
+
+        mediaPaths.push(finalPath)
+        mediaTypes.push('image')
+
+        // Preview (blurred public thumbnail) — same path scheme as before.
+        let savedPreviewPath: string | null = null
+        const previewPath = finalPath.replace(/\.[^./]+$/, '_preview.jpg')
         try {
-          const thumbBuffer = Buffer.from(await thumbFile.arrayBuffer())
-          const previewBuffer = await makePreviewBuffer(thumbBuffer)
+          const previewBuffer = await makePreviewBuffer(watermarked)
           const { error: prevErr } = await service.storage
             .from('previews')
-            .upload(previewPath, previewBuffer, { contentType: 'image/jpeg', cacheControl: '3600', upsert: false })
-          if (!prevErr) previewPaths.push(previewPath)
+            .upload(previewPath, previewBuffer, {
+              contentType:  'image/jpeg',
+              cacheControl: '3600',
+              upsert:        true,
+            })
+          if (!prevErr) {
+            previewPaths.push(previewPath)
+            savedPreviewPath = previewPath
+          }
         } catch { /* skip */ }
+
+        mediaModeration.push({
+          index:      mediaPaths.length - 1,
+          type:       'image',
+          scanned:    true,
+          flagged:    flagResult.flagged,
+          categories: flagResult.categories,
+          max_score:  flagResult.maxScore,
+          scores:     flagResult.scores,
+        })
+
+        if (flagResult.flagged) {
+          pendingFlags.push({
+            storagePath: finalPath,
+            previewPath: savedPreviewPath,
+            categories:  flagResult.categories,
+            maxScore:    flagResult.maxScore,
+            scores:      flagResult.scores,
+          })
+        }
+
+      } else if (type === 'video') {
+        const videoPath = videoPaths[videoIdx]
+        const thumbPath = videoThumbPaths[videoIdx]
+        videoIdx++
+
+        if (!videoPath) continue
+        mediaPaths.push(videoPath)
+        mediaTypes.push('video')
+
+        mediaModeration.push({
+          index:      mediaPaths.length - 1,
+          type:       'video',
+          scanned:    false,
+          flagged:    false,
+          categories: [],
+          max_score:  0,
+          scores:     {},
+        })
+
+        // Thumb already lives in the `previews` bucket (client uploaded it
+        // via signed URL). We just resize+blur it to match the post-image
+        // preview style and overwrite in place.
+        if (thumbPath) {
+          try {
+            const { data: thumbBlob } = await service.storage.from('previews').download(thumbPath)
+            if (thumbBlob) {
+              const thumbBuffer = Buffer.from(await thumbBlob.arrayBuffer())
+              const previewBuffer = await makePreviewBuffer(thumbBuffer)
+              const { error: prevErr } = await service.storage
+                .from('previews')
+                .upload(thumbPath, previewBuffer, {
+                  contentType:  'image/jpeg',
+                  cacheControl: '3600',
+                  upsert:        true,
+                })
+              if (!prevErr) previewPaths.push(thumbPath)
+            }
+          } catch { /* skip */ }
+        }
       }
     }
-  }
 
-  const postData: Record<string, unknown> = {
-    creator_id: user.id,
-    caption: caption || null,
-    access_type: accessType,
-    media_paths: mediaPaths,
-    preview_paths: previewPaths,
-    media_types: mediaTypes,
-    media_moderation: mediaModeration,
-    published_at: new Date().toISOString(),
-  }
-
-  if (accessType === 'ppv' && priceRaw) {
-    postData.price_usd = parseFloat(priceRaw)
-  }
-
-  const { data: insertedPost, error: insertErr } = await service
-    .from('posts')
-    .insert(postData)
-    .select('id')
-    .single()
-  if (insertErr || !insertedPost) {
-    return NextResponse.json({ error: insertErr?.message ?? 'Insert failed' }, { status: 500 })
-  }
-
-  const posthog = getPostHogClient()
-  posthog.capture({
-    distinctId: user.id,
-    event: 'post_created',
-    properties: {
-      post_id: insertedPost.id,
-      access_type: accessType,
-      media_count: mediaPaths.length,
-      has_caption: Boolean(caption),
-      price_usd: accessType === 'ppv' && priceRaw ? parseFloat(priceRaw) : undefined,
-    },
-  })
-  await posthog.shutdown()
-
-  // Persist any SightEngine flags as a best-effort audit (errors don't fail the request)
-  if (pendingFlags.length > 0) {
-    await service.from('image_content_flags').insert(
-      pendingFlags.map((f) => ({
-        source_type:        'post',
-        post_id:            insertedPost.id,
-        creator_id:         user.id,
-        storage_bucket:     'originals',
-        storage_path:       f.storagePath,
-        preview_path:       f.previewPath,
-        flagged_categories: f.categories,
-        max_score:          f.maxScore,
-        detection_scores:   f.scores,
-      })),
-    )
-
-    // After persisting, check if this creator has crossed the high-confidence
-    // strike limit and auto-suspend them if so.
-    const highConfidence = pendingFlags.some((f) => f.maxScore >= 0.9)
-    if (highConfidence) {
-      await checkAndSuspendForNsfw(service, user.id)
+    const postData: Record<string, unknown> = {
+      creator_id:       user.id,
+      caption:          caption || null,
+      access_type:      accessType,
+      media_paths:      mediaPaths,
+      preview_paths:    previewPaths,
+      media_types:      mediaTypes,
+      media_moderation: mediaModeration,
+      published_at:     new Date().toISOString(),
+      published:        canPublish,
     }
-  }
 
-  return NextResponse.json({ ok: true })
+    if (accessType === 'ppv' && priceRaw != null) {
+      postData.price_usd = typeof priceRaw === 'number' ? priceRaw : parseFloat(String(priceRaw))
+    }
+
+    stage = 'db_insert'
+    const { data: insertedPost, error: insertErr } = await service
+      .from('posts')
+      .insert(postData)
+      .select('id')
+      .single()
+    if (insertErr || !insertedPost) {
+      return NextResponse.json({ error: insertErr?.message ?? 'Insert failed' }, { status: 500 })
+    }
+
+    // ── Post-insert side effects ────────────────────────────────────────────
+    stage = 'posthog'
+    try {
+      getPostHogClient()?.capture({
+        distinctId: user.id,
+        event: 'post_created',
+        properties: {
+          post_id:     insertedPost.id,
+          access_type: accessType,
+          media_count: mediaPaths.length,
+          has_caption: Boolean(caption),
+          price_usd:
+            accessType === 'ppv' && priceRaw != null
+              ? typeof priceRaw === 'number' ? priceRaw : parseFloat(String(priceRaw))
+              : undefined,
+        },
+      })
+    } catch (err) {
+      console.error('[posts/create] posthog capture failed:', err)
+    }
+
+    if (pendingFlags.length > 0) {
+      stage = 'flag_audit'
+      try {
+        await service.from('image_content_flags').insert(
+          pendingFlags.map((f) => ({
+            source_type:        'post',
+            post_id:            insertedPost.id,
+            creator_id:         user.id,
+            storage_bucket:     'originals',
+            storage_path:       f.storagePath,
+            preview_path:       f.previewPath,
+            flagged_categories: f.categories,
+            max_score:          f.maxScore,
+            detection_scores:   f.scores,
+          })),
+        )
+
+        const highConfidence = pendingFlags.some((f) => f.maxScore >= 0.9)
+        if (highConfidence) {
+          await checkAndSuspendForNsfw(service, user.id)
+        }
+      } catch (err) {
+        console.error('[posts/create] flag audit failed:', err)
+      }
+    }
+
+    return NextResponse.json({
+      ok:        true,
+      postId:    insertedPost.id,
+      published: canPublish,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    console.error(`[posts/create] uncaught at stage=${stage}:`, err)
+    return NextResponse.json(
+      { error: `Server error at ${stage}: ${message}`, stage },
+      { status: 500 },
+    )
+  }
 }

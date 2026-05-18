@@ -1,21 +1,33 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, Fragment } from 'react'
 import type { FeedPost } from '@/lib/types'
 import { FeedPostCard } from './feed-post-card'
+import { InlineRecommendations } from './inline-recommendations'
+import type { RecommendedCreator } from './recommended-creators'
+
+const PAGE_SIZE      = 10
+const INJECTION_SLOT = 6   // 0-indexed → position 7 within each 10-post window
+const INJECTION_SIZE = 3   // creators per inline suggestion strip
 
 interface FeedClientProps {
-  initialPosts: FeedPost[]
-  viewerId: string
-  viewerIsAdmin?: boolean
+  initialPosts:    FeedPost[]
+  recommendations: RecommendedCreator[]
+  viewerId:        string
+  viewerIsAdmin?:  boolean
 }
 
-export function FeedClient({ initialPosts, viewerId, viewerIsAdmin = false }: FeedClientProps) {
-  const [posts, setPosts] = useState<FeedPost[]>(initialPosts)
+export function FeedClient({
+  initialPosts,
+  recommendations,
+  viewerId,
+  viewerIsAdmin = false,
+}: FeedClientProps) {
+  const [posts, setPosts]     = useState<FeedPost[]>(initialPosts)
   const [loading, setLoading] = useState(false)
-  const [hasMore, setHasMore] = useState(initialPosts.length === 20)
+  const [hasMore, setHasMore] = useState(initialPosts.length === PAGE_SIZE)
   const sentinelRef = useRef<HTMLDivElement>(null)
-  const loadingRef = useRef(false)
+  const loadingRef  = useRef(false)
 
   const loadMore = useCallback(async () => {
     if (loadingRef.current || !hasMore) return
@@ -25,7 +37,7 @@ export function FeedClient({ initialPosts, viewerId, viewerIsAdmin = false }: Fe
     try {
       const lastPost = posts[posts.length - 1]
       const cursor = lastPost?.published_at ?? ''
-      const res = await fetch(`/api/feed?cursor=${encodeURIComponent(cursor)}&limit=20`)
+      const res = await fetch(`/api/feed?cursor=${encodeURIComponent(cursor)}&limit=${PAGE_SIZE}`)
       if (!res.ok) return
 
       const { posts: next } = await res.json() as { posts: FeedPost[] }
@@ -35,28 +47,23 @@ export function FeedClient({ initialPosts, viewerId, viewerIsAdmin = false }: Fe
       }
 
       setPosts(prev => {
-        // Deduplicate by id
         const ids = new Set(prev.map(p => p.id))
         return [...prev, ...next.filter(p => !ids.has(p.id))]
       })
 
-      if (next.length < 20) setHasMore(false)
+      if (next.length < PAGE_SIZE) setHasMore(false)
     } finally {
       setLoading(false)
       loadingRef.current = false
     }
   }, [posts, hasMore])
 
-  // IntersectionObserver — fire loadMore when sentinel is visible
   useEffect(() => {
     const el = sentinelRef.current
     if (!el) return
-
     const observer = new IntersectionObserver(
-      entries => {
-        if (entries[0].isIntersecting) loadMore()
-      },
-      { rootMargin: '200px' }
+      entries => { if (entries[0].isIntersecting) loadMore() },
+      { rootMargin: '200px' },
     )
     observer.observe(el)
     return () => observer.disconnect()
@@ -76,18 +83,45 @@ export function FeedClient({ initialPosts, viewerId, viewerIsAdmin = false }: Fe
     )
   }
 
+  // Pre-compute each inline suggestion strip by slicing the recommendations
+  // pool. When the pool is shorter than what the feed needs, we wrap around
+  // so longer sessions still get suggestions (some duplicates after the pool
+  // is exhausted, but that's acceptable for a discovery rail).
+  function sliceFor(injectionIndex: number): RecommendedCreator[] {
+    if (recommendations.length === 0) return []
+    const start = (injectionIndex * INJECTION_SIZE) % recommendations.length
+    const slice: RecommendedCreator[] = []
+    for (let i = 0; i < INJECTION_SIZE; i++) {
+      slice.push(recommendations[(start + i) % recommendations.length])
+    }
+    return slice
+  }
+
   return (
     <div className="flex flex-col gap-5">
-      {posts.map(post => (
-        <FeedPostCard
-          key={post.id}
-          post={post}
-          viewerId={viewerId}
-          viewerIsAdmin={viewerIsAdmin}
-        />
-      ))}
+      {posts.map((post, i) => {
+        // Inject a suggestions strip at the 7th slot of every 10-post window
+        // (after index 6, 16, 26 ...). The injection itself doesn't shift the
+        // 10-post bucketing because the injection-index is derived from `i`.
+        const showInjection =
+          recommendations.length > 0 && i % PAGE_SIZE === INJECTION_SLOT && i > 0
 
-      {/* Infinite scroll sentinel */}
+        const injectionIndex = Math.floor(i / PAGE_SIZE)
+
+        return (
+          <Fragment key={post.id}>
+            {showInjection && (
+              <InlineRecommendations creators={sliceFor(injectionIndex - 1)} />
+            )}
+            <FeedPostCard
+              post={post}
+              viewerId={viewerId}
+              viewerIsAdmin={viewerIsAdmin}
+            />
+          </Fragment>
+        )
+      })}
+
       <div ref={sentinelRef} className="py-1" />
 
       {loading && (

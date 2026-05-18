@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { MobileCreatorSearch } from '@/components/mobile-creator-search'
 import type { Profile, Notification } from '@/lib/types'
 
 interface NavProps {
@@ -173,6 +174,7 @@ export function Nav({ profile }: NavProps) {
   const [unreadNotifs, setUnreadNotifs] = useState(0)
   const [notifs, setNotifs] = useState<Notification[]>([])
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false)
 
   const isApprovedCreator = profile?.creator_status === 'approved'
   const isAdmin = profile?.role === 'admin'
@@ -372,10 +374,21 @@ export function Nav({ profile }: NavProps) {
             )}
           </nav>
 
-          {/* ── Mobile cluster (< md): messages + bell + burger ───────────── */}
+          {/* ── Mobile cluster (< md): search + messages + bell + burger ── */}
           <div className="md:hidden flex items-center gap-1">
             {profile ? (
               <>
+                <button
+                  type="button"
+                  onClick={() => setMobileSearchOpen(true)}
+                  className="h-9 w-9 flex items-center justify-center rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors"
+                  aria-label="Search creators"
+                >
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.75} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+                  </svg>
+                </button>
+
                 <Link
                   href="/messages"
                   className="relative h-9 w-9 flex items-center justify-center rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors"
@@ -543,6 +556,13 @@ export function Nav({ profile }: NavProps) {
             </div>
           </aside>
         </>
+      )}
+
+      {profile && (
+        <MobileCreatorSearch
+          open={mobileSearchOpen}
+          onClose={() => setMobileSearchOpen(false)}
+        />
       )}
     </>
   )

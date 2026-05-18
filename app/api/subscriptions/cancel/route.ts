@@ -33,9 +33,15 @@ export async function POST(request: NextRequest) {
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-    const posthog = getPostHogClient()
-    posthog.capture({ distinctId: user.id, event: 'subscription_cancelled', properties: { creator_id: creatorId, subscription_type: 'free' } })
-    await posthog.shutdown()
+    try {
+      getPostHogClient()?.capture({
+        distinctId: user.id,
+        event:      'subscription_cancelled',
+        properties: { creator_id: creatorId, subscription_type: 'free' },
+      })
+    } catch (err) {
+      console.error('[subscriptions/cancel] posthog capture failed:', err)
+    }
 
     return NextResponse.json({ ok: true })
   }
@@ -72,9 +78,15 @@ export async function POST(request: NextRequest) {
     .update({ status: 'canceled', updated_at: new Date().toISOString() })
     .eq('id', sub.id)
 
-  const posthog = getPostHogClient()
-  posthog.capture({ distinctId: user.id, event: 'subscription_cancelled', properties: { creator_id: creatorId, subscription_type: 'paid' } })
-  await posthog.shutdown()
+  try {
+    getPostHogClient()?.capture({
+      distinctId: user.id,
+      event:      'subscription_cancelled',
+      properties: { creator_id: creatorId, subscription_type: 'paid' },
+    })
+  } catch (err) {
+    console.error('[subscriptions/cancel] posthog capture failed:', err)
+  }
 
   return NextResponse.json({ ok: true })
 }

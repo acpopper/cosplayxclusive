@@ -356,13 +356,15 @@ async function handlePaymentIntentSucceeded(supabase: SupabaseClient, event: Str
       }
     }
 
-    const phPpv = getPostHogClient()
-    phPpv.capture({
-      distinctId: meta.fan_id,
-      event:      'ppv_purchased',
-      properties: { post_id: meta.post_id, amount_usd: post?.price_usd ?? amountUsd, creator_id: post?.creator_id },
-    })
-    await phPpv.shutdown()
+    try {
+      getPostHogClient()?.capture({
+        distinctId: meta.fan_id,
+        event:      'ppv_purchased',
+        properties: { post_id: meta.post_id, amount_usd: post?.price_usd ?? amountUsd, creator_id: post?.creator_id },
+      })
+    } catch (err) {
+      console.error('[webhook] ppv_purchased capture failed:', err)
+    }
   }
 
   if (meta.type === 'message_ppv' && meta.fan_id && meta.message_id && meta.creator_id) {
@@ -436,13 +438,15 @@ async function handlePaymentIntentSucceeded(supabase: SupabaseClient, event: Str
       })
     }
 
-    const phMsg = getPostHogClient()
-    phMsg.capture({
-      distinctId: meta.fan_id,
-      event:      'message_ppv_purchased',
-      properties: { message_id: meta.message_id, amount_usd: message?.price_usd ?? amountUsd, creator_id: meta.creator_id },
-    })
-    await phMsg.shutdown()
+    try {
+      getPostHogClient()?.capture({
+        distinctId: meta.fan_id,
+        event:      'message_ppv_purchased',
+        properties: { message_id: meta.message_id, amount_usd: message?.price_usd ?? amountUsd, creator_id: meta.creator_id },
+      })
+    } catch (err) {
+      console.error('[webhook] message_ppv_purchased capture failed:', err)
+    }
   }
 }
 
@@ -533,18 +537,20 @@ async function handleSubscriptionChange(supabase: SupabaseClient, event: Stripe.
     })
   }
 
-  const phSub = getPostHogClient()
-  phSub.capture({
-    distinctId: meta.fan_id,
-    event:      'subscription_completed',
-    properties: {
-      creator_id:             meta.creator_id,
-      subscription_price_usd: creator?.subscription_price_usd,
-      is_returning:           isReturn,
-      stripe_subscription_id: subscription.id,
-    },
-  })
-  await phSub.shutdown()
+  try {
+    getPostHogClient()?.capture({
+      distinctId: meta.fan_id,
+      event:      'subscription_completed',
+      properties: {
+        creator_id:             meta.creator_id,
+        subscription_price_usd: creator?.subscription_price_usd,
+        is_returning:           isReturn,
+        stripe_subscription_id: subscription.id,
+      },
+    })
+  } catch (err) {
+    console.error('[webhook] subscription_completed capture failed:', err)
+  }
 
   await maybeSendAutoMessage(supabase, meta.fan_id, meta.creator_id, isReturn)
 
